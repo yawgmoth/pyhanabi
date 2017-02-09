@@ -1,6 +1,5 @@
 import random
 import sys
-import numpy
 import copy
 
 GREEN = 0
@@ -477,6 +476,9 @@ class Game(object):
             if self.board[col][1] == num-1:
                 self.board[col] = (col,num)
                 self.played.append((col,num))
+                if num == 5:
+                    self.hitns += 1
+                    self.hints = min(self.hints, 8)
                 print >>self.log, "successfully! Board is now", format_hand(self.board)
             else:
                 self.trash.append((col,num))
@@ -522,9 +524,11 @@ class Game(object):
             self.current_player += 1
             self.current_player %= len(self.players)
         print >>self.log, "Game done, hits left:", self.hits
-        points = sum(map(lambda (col,num): num, self.board))
+        points = self.score()
         print >>self.log, "Points:", points
         return points
+    def score(self):
+        return sum(map(lambda (col,num): num, self.board))
     def single_turn(self):
         if not self.done():
             if not self.deck:
@@ -587,6 +591,7 @@ def main(args):
             pass
     if n < 10:
         print pts
+    import numpy
     print "average:", numpy.mean(pts)
     print "stddev:", numpy.std(pts, ddof=1)
     
