@@ -477,7 +477,7 @@ class Game(object):
                 self.board[col] = (col,num)
                 self.played.append((col,num))
                 if num == 5:
-                    self.hitns += 1
+                    self.hints += 1
                     self.hints = min(self.hints, 8)
                 print >>self.log, "successfully! Board is now", format_hand(self.board)
             else:
