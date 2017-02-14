@@ -90,7 +90,6 @@ def format_action((i,(action,pnr,card))):
     if i == 0:
         return "<b>" + result + '</b> <a href="/explain" target="_blank">(Explain)</a><br/>'
     return result
-        
 
 def show_game_state(game, player, turn):
     
@@ -122,11 +121,11 @@ def show_game_state(game, player, turn):
     while len(yourcards) < 10:
         yourcards.append("")
     board = format_board(game, player.show)
-    foundtrash = False
+    foundtrash = [False]
     def format_trash(c):
         result = hanabi.format_card(c)
-        if (TRASH, 0, -1) in player.show and c == game.trash[-1] and not foundtrash:
-            foundtrash = True
+        if (TRASH, 0, -1) in player.show and c == game.trash[-1] and not foundtrash[0]:
+            foundtrash[0] = True
             return '<font color="red">'+ result + "</font>"
         return result
     localtrash = game.trash[:]
