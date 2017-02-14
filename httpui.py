@@ -20,7 +20,8 @@ template = """
 <br/>
 <br/>
 <b>Hints:</b> %d<br/>
-<b>Mistakes:</b> %d
+<b>Mistakes:</b> %d<br/>
+<b>Cards left:</b> %d<br/>
 </td>
 <td>
 <center>
@@ -87,7 +88,7 @@ def format_action((i,(action,pnr,card))):
         else:
             result += str(action.num) + "s"
     if i == 0:
-        return "<b>" + result + "</b><br/>"
+        return "<b>" + result + '</b> <a href="/explain" target="_blank">(Explain)</a><br/>'
     return result
         
 
@@ -104,7 +105,7 @@ def show_game_state(game, player, turn):
         aicards.append(make_ai_card((i,c), (HAND, 0, i) in player.show))
         aicards.append(", ".join(player.aiknows[i]))
     
-    while len(aicards) < 5:
+    while len(aicards) < 10:
         aicards.append("")
     def make_your_card((i,(col,num)), highlight):
         playlinks = [("Play", "/%d/play/%d"%(turn,i)), ("Discard", "/%d/discard/%d"%(turn,i))]
@@ -121,15 +122,17 @@ def show_game_state(game, player, turn):
     while len(yourcards) < 10:
         yourcards.append("")
     board = format_board(game, player.show)
+    foundtrash = False
     def format_trash(c):
         result = hanabi.format_card(c)
-        if (TRASH, 0, -1) in player.show and c == game.trash[-1]: 
+        if (TRASH, 0, -1) in player.show and c == game.trash[-1] and not foundtrash:
+            foundtrash = True
             return '<font color="red">'+ result + "</font>"
         return result
     localtrash = game.trash[:]
     localtrash.sort()
     trash = ["<br/>".join(map(format_trash, localtrash))]
-    args = tuple(trash + [game.hints, game.hits] + aicards + [board] + yourcards + ["<br/>".join(map(format_action, enumerate(list(reversed(player.actions))[:25])))])
+    args = tuple(trash + [game.hints, 3-game.hits, len(game.deck)] + aicards + [board] + yourcards + ["<br/>".join(map(format_action, enumerate(list(reversed(player.actions))[:25])))])
     return template%args
 
 
@@ -245,6 +248,17 @@ class HTTPPlayer(hanabi.Player):
                         self.aiknows[i].add(str(num))
                         self.show.append((HAND,action.pnr,i))
  
+        if action.type in [hanabi.PLAY, hanabi.DISCARD] and player == 0:
+            newshow = []
+            for (where,who,what) in self.show:
+                if who == 0 and where == HAND:
+                    if what < action.cnr:
+                        newshow.append((where,who,what))
+                    elif what > action.cnr:
+                        newshow.append((where,who,what-1))
+                else:
+                    newshow.append((where,who,what))
+            self.show = newshow
         if action.type == hanabi.DISCARD:
             self.show.append((TRASH,0,-1))
         elif action.type == hanabi.PLAY:
@@ -289,9 +303,12 @@ class MyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
         s.send_header("Content-type", "text/html")
         s.end_headers()
         
+        
+            
+        
         if s.path.startswith("/new/"):
             type = s.path[5:]
-            ais = {"random": hanabi.Player, "inner": hanabi.InnerStatePlayer, "outer": hanabi.OuterStatePlayer, "self": hanabi.SelfRecognitionPlayer}
+            ais = {"random": hanabi.Player, "inner": hanabi.InnerStatePlayer, "outer": hanabi.OuterStatePlayer, "self": hanabi.SelfRecognitionPlayer, "intentional": hanabi.IntentionalPlayer}
             if type in ais:
                 ai = ais[type](type, 0)
             turn = 1
@@ -310,8 +327,13 @@ class MyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
             s.wfile.write('<li><a href="/new/inner">Inner State</a></li>\n')
             s.wfile.write('<li><a href="/new/outer">Outer State</a></li>\n')
             s.wfile.write('<li><a href="/new/self">Self Recognition</a></li>\n')
+            s.wfile.write('<li><a href="/new/intentional">Intentional Player</a></li>\n')
             
             return
+            
+        if s.path.startswith("/explain"):
+            s.show_explanation()
+            return 
             
         if s.path.startswith("/start/"):
             game.single_turn()
@@ -348,7 +370,18 @@ class MyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
         
         s.wfile.write(show_game_state(game, player, turn))
        
-        #s.wfile.write("<p>You accessed path: %s</p>" % s.path)
+        s.wfile.write("</body></html>")
+        
+    def show_explanation(s):
+        s.wfile.write("<html><head><title>Hanabi - AI Explanation</title></head>")
+        s.wfile.write('<body>')
+        
+        s.wfile.write('<table border="1">')
+        for key in game.players[0].explanation:
+            s.wfile.write('<tr><td>%s</td><td>%s</td>'%(key,game.players[0].explanation[key]))
+        s.wfile.write("</table>")
+       
+        
         s.wfile.write("</body></html>")
  
 if __name__ == '__main__':
