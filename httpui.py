@@ -376,9 +376,13 @@ class MyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
         s.wfile.write('<body>')
         
         s.wfile.write('<table border="1">')
-        for key in game.players[0].explanation:
-            s.wfile.write('<tr><td>%s</td><td>%s</td>'%(key,game.players[0].explanation[key]))
-        s.wfile.write("</table>")
+        s.wfile.write('<tr><th>Description</th><th>Card 1</th><th>Card 2</th><th>Card 3</th><th>Card 4</th><th>Card 5</th>\n')
+        for line in game.players[0].explanation:
+            s.wfile.write('<tr>\n')
+            for item in line:
+                s.wfile.write('\t<td>%s</td>\n'%(str(item).replace("\n", "<br/>")))
+            s.wfile.write('</tr>\n')
+        s.wfile.write("</table>\n")
        
         
         s.wfile.write("</body></html>")
