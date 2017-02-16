@@ -1044,7 +1044,9 @@ class Game(object):
         self.trash = []
         self.log = log
         self.turn = 1
-        self.format = 0
+        self.format = format
+        if self.format:
+            print >> self.log, self.deck
     def make_hands(self):
         handsize = 4
         if len(self.players) < 4:
@@ -1065,14 +1067,12 @@ class Game(object):
     def perform(self, action):
         for p in self.players:
             p.inform(action, self.current_player, self)
-            
         if format:
-            print >> self.log, self.current_player, action.type
+            print >> self.log, "MOVE:", self.current_player, action.type, action.cnr, action.pnr, action.col, action.num
         if action.type == HINT_COLOR:
             self.hints -= 1
-            if not self.format:            
-                print >>self.log, self.players[self.current_player].name, "hints", self.players[action.pnr].name, "about all their", COLORNAMES[action.col], "cards", "hints remaining:", self.hints
-                print >>self.log, self.players[action.pnr].name, "has", format_hand(self.hands[action.pnr])
+            print >>self.log, self.players[self.current_player].name, "hints", self.players[action.pnr].name, "about all their", COLORNAMES[action.col], "cards", "hints remaining:", self.hints
+            print >>self.log, self.players[action.pnr].name, "has", format_hand(self.hands[action.pnr])
             for (col,num),knowledge in zip(self.hands[action.pnr],self.knowledge[action.pnr]):
                 if col == action.col:
                     for i, k in enumerate(knowledge):
@@ -1174,6 +1174,8 @@ class Game(object):
             self.current_player %= len(self.players)
     def external_turn(self, action): 
         if not self.done():
+            if not self.deck:
+                self.extra_turns += 1
             self.perform(action)
             self.current_player += 1
             self.current_player %= len(self.players)
@@ -1184,6 +1186,10 @@ class Game(object):
             if num != 5:
                 return False
         return True
+    def finish(self):
+        if self.format:
+            print >> self.log, "Score", self.score()
+            self.log.close()
         
     
 class NullStream(object):

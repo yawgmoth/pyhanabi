@@ -4,6 +4,7 @@ import shutil
 import os
 import hanabi
 import random
+import hashlib
 
 HOST_NAME = "127.0.0.1"
 PORT_NUMBER = 31337
@@ -57,9 +58,9 @@ board_template = """<tr><td colspan="5"><center>%s</center></td></tr>
     <td>%s</td>
 </tr>"""
 
-def format_board(game, show):
+def format_board(game, show, gid):
     if not game.started:
-        return '<tr><td colspan="5"><center><h1><a href="/start/">Start Game</a></h1></center></td></tr>'
+        return '<tr><td colspan="5"><center><h1><a href="/gid%s/start/">Start Game</a></h1></center></td></tr>'%gid
     title = "<h2>Board</h2>"
     if game.done():
         title = "<h2>Game End<h2>Points: " + str(game.score()) + '<br/><a href="/restart/">New game</a>'
@@ -69,7 +70,7 @@ def format_board(game, show):
     args = tuple([title] + boardcards)
     return board_template%args
 
-def format_action((i,(action,pnr,card))):
+def format_action((i,(action,pnr,card)), gid):
     result = "You "
     other = "the AI"
     otherp = "their"
@@ -88,13 +89,13 @@ def format_action((i,(action,pnr,card))):
         else:
             result += str(action.num) + "s"
     if i == 0:
-        return "<b>" + result + '</b> <a href="/explain" target="_blank">(Explain)</a><br/>'
+        return "<b>" + result + '</b> <a href="/gid%s/explain" target="_blank">(Explain)</a><br/>'%gid
     return result
 
-def show_game_state(game, player, turn):
+def show_game_state(game, player, turn, gid):
     
     def make_ai_card((i,(col,num)), highlight):
-        hintlinks = [("Hint Rank", "/%d/hintrank/%d"%(turn,i)), ("Hint Color", "/%d/hintcolor/%d"%(turn,i))]
+        hintlinks = [("Hint Rank", "/gid%s/%d/hintrank/%d"%(gid,turn,i)), ("Hint Color", "/gid%s/%d/hintcolor/%d"%(gid,turn,i))]
         if game.hints == 0 or game.done() or not game.started:
             hintlinks = []
             highlight = False
@@ -107,7 +108,7 @@ def show_game_state(game, player, turn):
     while len(aicards) < 10:
         aicards.append("")
     def make_your_card((i,(col,num)), highlight):
-        playlinks = [("Play", "/%d/play/%d"%(turn,i)), ("Discard", "/%d/discard/%d"%(turn,i))]
+        playlinks = [("Play", "/gid%s/%d/play/%d"%(gid,turn,i)), ("Discard", "/gid%s/%d/discard/%d"%(gid,turn,i))]
         if game.done() or not game.started:
             playlinks = []
         return unknown_card_image(playlinks, highlight)
@@ -120,7 +121,7 @@ def show_game_state(game, player, turn):
         yourcards.append(", ".join(player.knows[i]))
     while len(yourcards) < 10:
         yourcards.append("")
-    board = format_board(game, player.show)
+    board = format_board(game, player.show, gid)
     foundtrash = [False]
     def format_trash(c):
         result = hanabi.format_card(c)
@@ -131,7 +132,7 @@ def show_game_state(game, player, turn):
     localtrash = game.trash[:]
     localtrash.sort()
     trash = ["<br/>".join(map(format_trash, localtrash))]
-    args = tuple(trash + [game.hints, 3-game.hits, len(game.deck)] + aicards + [board] + yourcards + ["<br/>".join(map(format_action, enumerate(list(reversed(player.actions))[:25])))])
+    args = tuple(trash + [game.hints, 3-game.hits, len(game.deck)] + aicards + [board] + yourcards + ["<br/>".join(map(lambda x: format_action(x,gid), enumerate(list(reversed(player.actions))[:25])))])
     return template%args
 
 
@@ -201,7 +202,7 @@ def unknown_card_image(links=[], highlight=False):
         highlighttext = ' stroke="red" stroke-width="4"'
     return image%(highlighttext,linktext)
     
-game = None
+games = {}
 player = None
 turn = 0
 
@@ -282,22 +283,19 @@ class MyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
         s.end_headers()
     def do_GET(s):
         """Respond to a GET request."""
-        if s.path.startswith("/img/"):
-            s.send_response(404)
-            s.send_header("Content-type", "image/svg")
-            return
-            # if we wanted to host the actual images, this is where that would happen
-            if "/" not in s.path[5:] and "\\" not in s.path[5:]:
-                fname = s.path[1:]
-                fs = os.stat(fname)
-                s.send_header("Content-Length", fs[6])
-                s.end_headers()
-                f = open(fname, "rb")
-                shutil.copyfileob(f, s.wfile)
-                f.close()
-            return
-        global game, player, turn
+        global games
         
+        game = None
+        player = None
+        turn = None
+        gid = None
+        path = s.path
+        if s.path.startswith("/gid"):
+            gid = s.path[4:20]
+            if gid in games:
+                game, player, turn = games[gid]
+            path = s.path[20:]
+        print "gid", gid, "path", path
         s.send_response(200)
         s.send_header("Content-type", "text/html")
         s.end_headers()
@@ -305,21 +303,29 @@ class MyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
         
             
         
-        if s.path.startswith("/new/"):
+        if path.startswith("/new/"):
             type = s.path[5:]
             ais = {"random": hanabi.Player, "inner": hanabi.InnerStatePlayer, "outer": hanabi.OuterStatePlayer, "self": hanabi.SelfRecognitionPlayer, "intentional": hanabi.IntentionalPlayer}
             if type in ais:
                 ai = ais[type](type, 0)
             turn = 1
             player = HTTPPlayer("You", 1)
-            
-            game = hanabi.Game([ai,player], hanabi.NullStream())
+            peer = str(s.connection.getpeername()) + str(time.time())
+            gid = hashlib.sha224(peer).hexdigest()[:16]
+            log = file("log/game%s.log"%gid, "w")
+            print >>log, "Treatment:", type
+            game = hanabi.Game([ai,player], log=log, format=1)
             game.started = False
-            
+
+            games[gid] = (game,player,turn)
         
             
         
-        if game is None or s.path.startswith("/restart/"):
+        if gid is None or game is None or path.startswith("/restart/"):
+            if game is not None:
+                del game
+            if gid is not None and gid in games:
+                del games[gid]
             s.wfile.write("<html><head><title>Hanabi</title></head>\n")
             s.wfile.write('<body><h1>Welcome to Hanabi</h1> <p>To start, choose an AI:</p>\n')
             s.wfile.write('<ul><li><a href="/new/random">Random</a></li>\n')
@@ -330,16 +336,16 @@ class MyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
             
             return
             
-        if s.path.startswith("/explain"):
-            s.show_explanation()
+        if path.startswith("/explain"):
+            s.show_explanation(game)
             return 
             
-        if s.path.startswith("/start/"):
+        if path.startswith("/start/"):
             game.single_turn()
             game.started = True
             
         
-        parts = s.path.strip("/").split("/")
+        parts = path.strip("/").split("/")
         if parts[0] == str(turn):
             actionname = parts[1]
             index = int(parts[2])
@@ -357,6 +363,7 @@ class MyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
             
             if action:
                 turn += 1
+                games[gid] = (game,player,turn)
                 print "performing", action
                 game.external_turn(action)
                 game.single_turn()
@@ -367,11 +374,14 @@ class MyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
         s.wfile.write("<html><head><title>Hanabi</title></head>")
         s.wfile.write('<body>')
         
-        s.wfile.write(show_game_state(game, player, turn))
+        s.wfile.write(show_game_state(game, player, turn, gid))
        
         s.wfile.write("</body></html>")
+        if game.done() and gid is not None and gid in games:
+            game.finish()
+            del[gid]
         
-    def show_explanation(s):
+    def show_explanation(s, game):
         s.wfile.write("<html><head><title>Hanabi - AI Explanation</title></head>")
         s.wfile.write('<body>')
         
