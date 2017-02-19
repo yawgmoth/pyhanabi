@@ -5,6 +5,11 @@ import os
 import hanabi
 import random
 import hashlib
+import sys
+import traceback
+import consent
+from cgi import parse_header, parse_multipart
+from urlparse import parse_qs
 
 HOST_NAME = "127.0.0.1"
 PORT_NUMBER = 31337
@@ -12,6 +17,9 @@ PORT_NUMBER = 31337
 HAND = 0
 TRASH = 1
 BOARD = 2
+
+sys.stdout = file("hanabi.log", "w")
+sys.stderr = sys.stdout
 
 template = """
 
@@ -282,6 +290,12 @@ class MyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
         s.send_header("Content-type", "text/html")
         s.end_headers()
     def do_GET(s):
+        try:
+            return s.perform_response()
+        except Exception:
+            sys.stderr.write(traceback.format_exc())
+    
+    def perform_response(s):
         """Respond to a GET request."""
         global games
         
@@ -295,13 +309,46 @@ class MyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
             if gid in games:
                 game, player, turn = games[gid]
             path = s.path[20:]
-        print "gid", gid, "path", path
+        
+        if s.path.startswith("/favicon"):
+            s.send_response(200)
+            s.end_headers()
+            return
+            
+        # I honestly don't know why, but I already a request for http://www.google.com
+        if s.path.startswith("http://"): 
+            s.send_response(400)
+            s.end_headers()
+            return
+            
+        if s.path.startswith("/robots.txt"):
+            s.send_response(200)
+            s.send_header("Content-type", "text/plain")
+            s.end_headers()
+            s.wfile.write("User-agent: *\n")
+            s.wfile.write("Disallow: /\n")
+            return
+            
+        
+        
         s.send_response(200)
         s.send_header("Content-type", "text/html")
         s.end_headers()
         
-        
+        if s.path.startswith("/presurvey"):
+            peer = str(s.connection.getpeername()) + str(time.time())
+            gid = hashlib.sha224(peer).hexdigest()[:16]
+            s.presurvey(gid)
             
+            return
+            
+            
+        if s.path.startswith("/consent") or s.path == "/":
+            peer = str(s.connection.getpeername()) + str(time.time())
+            gid = hashlib.sha224(peer).hexdigest()[:16]
+            s.consentform()
+            
+            return
         
         if path.startswith("/new/"):
             type = s.path[5:]
@@ -315,8 +362,14 @@ class MyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
             log = file("log/game%s.log"%gid, "w")
             print >>log, "Treatment:", type
             game = hanabi.Game([ai,player], log=log, format=1)
+            game.ping = time.time()
             game.started = False
-
+            todelete = []
+            for g in games:
+                if games[g][0].ping + 3600 < time.time():
+                    todelete.append(g)
+            for g in todelete:
+                del games[g]
             games[gid] = (game,player,turn)
         
             
@@ -364,7 +417,6 @@ class MyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
             if action:
                 turn += 1
                 games[gid] = (game,player,turn)
-                print "performing", action
                 game.external_turn(action)
                 game.single_turn()
             
@@ -396,14 +448,71 @@ class MyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
        
         
         s.wfile.write("</body></html>")
+        
+    def add_choice(s, name, question, answers):
+        s.wfile.write("<p>")
+        s.wfile.write(question + "<br/>")
+        s.wfile.write('<select name="%s">\n'%name)
+        for (name,text) in answers:
+             s.wfile.write('<option value="%s">%s</option>\n'%(name,text))
+        s.wfile.write("</select>\n")
+        s.wfile.write("</p>")
+        
+    def add_question(s, name, question):
+        s.wfile.write("<p>")
+        s.wfile.write(question + "<br/>")
+        s.wfile.write('<input name="%s"/>\n'%name)
+        s.wfile.write("</p>")
+        
+    def presurvey(s, gid):
+        s.wfile.write('<center><h1>Welcome to the Hanabi AI experiment</h1>')
+        s.wfile.write('<form action="/submitpre" method="POST">')
+        s.add_question("age", "What is your age?")
+        s.add_choice("exp", "How familiar are you with the card game Hanabi?", 
+                            [("new", "I have never played"),
+                             ("dabbling", "I have played a few (1-10) times"),
+                             ("intermediate", "I have played multiple (10-50) times"),
+                             ("expert", "I have played many (&gt; 50) times")])
+        s.add_choice("score", "How often do you typically reach the top score of 25?", 
+                              [("never", "I never reach the top score, or I have never played Hanabi"),
+                               ("few", "I almost never reach the top score (about one in 50 or more games)"),
+                               ("sometimes", "I sometimes reach the top score (about one in 6-20 games)"),
+                               ("often", "I often reach the top score (about one in 5 or fewer games)")])
+        s.wfile.write("<p>")
+        s.wfile.write('<input type="submit"/>\n')
+        s.wfile.write('</form></center>')
+        
+    def parse_POST(self):
+        ctype, pdict = parse_header(self.headers['content-type'])
+        if ctype == 'multipart/form-data':
+            postvars = parse_multipart(self.rfile, pdict)
+        elif ctype == 'application/x-www-form-urlencoded':
+            length = int(self.headers['content-length'])
+            postvars = parse_qs(
+                    self.rfile.read(length), 
+                    keep_blank_values=1)
+        else:
+            postvars = {}
+        return postvars
+        
+    def do_POST(s):
+        s.send_response(200)
+        s.send_header("Content-type", "text/html")
+        s.end_headers()
+        vars = s.parse_POST()
+        
+    def consentform(s):
+        s.wfile.write(consent.consent)
+        s.wfile.write('<a href="/presurvey">By clicking here I agree to participate in the study</a>')
+        
  
 if __name__ == '__main__':
     server_class = BaseHTTPServer.HTTPServer
     httpd = server_class((HOST_NAME, PORT_NUMBER), MyHandler)
-    print time.asctime(), "Server Starts - %s:%s" % (HOST_NAME, PORT_NUMBER)
+    sys.stderr.write(time.asctime() + " Server Starts - %s:%s" % (HOST_NAME, PORT_NUMBER))
     try:
        httpd.serve_forever()
     except KeyboardInterrupt:
      pass
     httpd.server_close()
-    print time.asctime(), "Server Stops - %s:%s" % (HOST_NAME, PORT_NUMBER)
+    sys.stderr.write(time.asctime() +  " Server Stops - %s:%s" % (HOST_NAME, PORT_NUMBER))
