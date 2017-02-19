@@ -10,9 +10,8 @@ import traceback
 import consent
 from cgi import parse_header, parse_multipart
 from urlparse import parse_qs
+from serverconf import HOST_NAME, PORT_NUMBER
 
-HOST_NAME = "127.0.0.1"
-PORT_NUMBER = 31337
 
 HAND = 0
 TRASH = 1
