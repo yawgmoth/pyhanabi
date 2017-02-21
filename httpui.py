@@ -17,8 +17,8 @@ HAND = 0
 TRASH = 1
 BOARD = 2
 
-sys.stdout = file("hanabi.log", "w")
-sys.stderr = sys.stdout
+errlog = sys.stdout
+errlog = file("hanabi.log", "w")
 
 template = """
 
@@ -70,7 +70,10 @@ def format_board(game, show, gid):
         return '<tr><td colspan="5"><center><h1><a href="/gid%s/start/">Start Game</a></h1></center></td></tr>'%gid
     title = "<h2>Board</h2>"
     if game.done():
-        title = "<h2>Game End<h2>Points: " + str(game.score()) + '<br/><a href="/restart/">New game</a>'
+        if game.dopostsurvey:
+            title = "<h2>Game End<h2>Points: " + str(game.score()) + '<br/><a href="/postsurvey/%s">Continue</a>'%gid
+        else:
+            title = "<h2>Game End<h2>Points: " + str(game.score()) + '<br/><a href="/restart/">New game</a>'
     def make_board_image((i,card)):
         return make_card_image(card, [], (BOARD,0,i) in show)
     boardcards = map(make_board_image, enumerate(game.board))
@@ -210,6 +213,7 @@ def unknown_card_image(links=[], highlight=False):
     return image%(highlighttext,linktext)
     
 games = {}
+participants = {}
 player = None
 turn = 0
 
@@ -282,6 +286,7 @@ class HTTPPlayer(hanabi.Player):
             self.aiknows.append(set())
         
 
+ais = {"random": hanabi.Player, "inner": hanabi.InnerStatePlayer, "outer": hanabi.OuterStatePlayer, "self": hanabi.SelfRecognitionPlayer, "intentional": hanabi.IntentionalPlayer, "full": hanabi.SelfIntentionalPlayer}
 
 class MyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
     def do_HEAD(s):
@@ -292,7 +297,8 @@ class MyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
         try:
             return s.perform_response()
         except Exception:
-            sys.stderr.write(traceback.format_exc())
+            errlog.write(traceback.format_exc())
+            errlog.flush()
     
     def perform_response(s):
         """Respond to a GET request."""
@@ -335,32 +341,34 @@ class MyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
         s.end_headers()
         
         if s.path.startswith("/presurvey"):
-            peer = str(s.connection.getpeername()) + str(time.time())
-            gid = hashlib.sha224(peer).hexdigest()[:16]
+            gid = s.getgid()
+            participants[gid] = file("log/survey%s.log"%gid, "w")
             s.presurvey(gid)
+            return
             
+        if s.path.startswith("/postsurvey/"):
+            gid = s.path[12:]
+            if gid in participants:
+                s.postsurvey(gid)
             return
             
             
-        if s.path.startswith("/consent") or s.path == "/":
-            peer = str(s.connection.getpeername()) + str(time.time())
-            gid = hashlib.sha224(peer).hexdigest()[:16]
+        if s.path.startswith("/consent"): # or s.path == "/":
             s.consentform()
             
             return
         
         if path.startswith("/new/"):
             type = s.path[5:]
-            ais = {"random": hanabi.Player, "inner": hanabi.InnerStatePlayer, "outer": hanabi.OuterStatePlayer, "self": hanabi.SelfRecognitionPlayer, "intentional": hanabi.IntentionalPlayer}
             if type in ais:
                 ai = ais[type](type, 0)
             turn = 1
             player = HTTPPlayer("You", 1)
-            peer = str(s.connection.getpeername()) + str(time.time())
-            gid = hashlib.sha224(peer).hexdigest()[:16]
+            gid = s.getgid()
             log = file("log/game%s.log"%gid, "w")
             print >>log, "Treatment:", type
             game = hanabi.Game([ai,player], log=log, format=1)
+            game.treatment = type
             game.ping = time.time()
             game.started = False
             todelete = []
@@ -385,6 +393,7 @@ class MyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
             s.wfile.write('<li><a href="/new/outer">Outer State</a></li>\n')
             s.wfile.write('<li><a href="/new/self">Self Recognition</a></li>\n')
             s.wfile.write('<li><a href="/new/intentional">Intentional Player</a></li>\n')
+            s.wfile.write('<li><a href="/new/full">Fully Intentional Player</a></li>\n')
             
             return
             
@@ -429,6 +438,8 @@ class MyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
        
         s.wfile.write("</body></html>")
         if game.done() and gid is not None and gid in games:
+            errlog.write("%s game done. Score: %d\n"%(str(game.treatment), game.score()))
+            errlog.flush()
             game.finish()
             del[gid]
         
@@ -451,10 +462,10 @@ class MyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
     def add_choice(s, name, question, answers):
         s.wfile.write("<p>")
         s.wfile.write(question + "<br/>")
-        s.wfile.write('<select name="%s">\n'%name)
-        for (name,text) in answers:
-             s.wfile.write('<option value="%s">%s</option>\n'%(name,text))
-        s.wfile.write("</select>\n")
+        s.wfile.write('<fieldset id="%s">\n'%name)
+        for (aname,text) in answers:
+             s.wfile.write('<input name="%s" type="radio" value="%s">%s</option><br/>\n'%(name,aname,text))
+        s.wfile.write("</fieldset>\n")
         s.wfile.write("</p>")
         
     def add_question(s, name, question):
@@ -463,9 +474,12 @@ class MyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
         s.wfile.write('<input name="%s"/>\n'%name)
         s.wfile.write("</p>")
         
-    def presurvey(s, gid):
+    def presurvey(s, gid, warn=False):
         s.wfile.write('<center><h1>Welcome to the Hanabi AI experiment</h1>')
+        s.wfile.write('<table width="600px">\n<tr><td>')
         s.wfile.write('<form action="/submitpre" method="POST">')
+        if warn:
+            s.wfile.write('<font color="red">All questions are mandatory</font><br/>')
         s.add_question("age", "What is your age?")
         s.add_choice("exp", "How familiar are you with the card game Hanabi?", 
                             [("new", "I have never played"),
@@ -478,8 +492,38 @@ class MyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
                                ("sometimes", "I sometimes reach the top score (about one in 6-20 games)"),
                                ("often", "I often reach the top score (about one in 5 or fewer games)")])
         s.wfile.write("<p>")
+        s.wfile.write('<input name="gid" type="hidden" value="%s"/>\n'%gid)
+        s.wfile.write('<input type="submit" value="continue"/>\n')
+        s.wfile.write('</form></td></tr></table></center>')
+        
+    def postsurvey(s, gid, warn=False):
+        s.wfile.write('<center><h1>Questionaire</h1>')
+        s.wfile.write('<table width="600px">\n<tr><td>')
+        s.wfile.write('<form action="/submitpost" method="POST">')
+        if warn:
+            s.wfile.write('<font color="red">All questions are mandatory</font><br/>')
+        s.add_choice("intention", "How intentional/goal-directed did you think this AI was playing?", 
+                            [("1", "1 - Never performed goal-directed actions"),
+                             ("2", "2 - Rarely performed goal-directed actions"),
+                             ("3", "3 - Sometimes performed goal-directed actions"),
+                             ("4", "4 - Often performed goal-directed actions"),
+                             ("5", "5 - Always performed goal-directed actions")])
+        s.add_choice("skill", "How would you rate the play skill of this AI?", 
+                              [("vbad", "The AI played very badly"),
+                               ("bad", "The AI played badly"),
+                               ("ok", "The AI played ok"),
+                               ("good", "The AI played well"),
+                               ("vgood", "The AI played very well")])
+        s.add_choice("like", "How much did you enjoy playing with this AI?", 
+                              [("vhate", "I greatly disliked playing with this AI"),
+                               ("hate", "I somewhat disliked playing with this AI"),
+                               ("neutral", "I neither liked nor disliked playing with this AI"),
+                               ("like", "I somewhat liked playing with this AI"),
+                               ("vlike", "I really liked playing with this AI")])
+        s.wfile.write("<p>")
+        s.wfile.write('<input name="gid" type="hidden" value="%s"/>\n'%gid)
         s.wfile.write('<input type="submit"/>\n')
-        s.wfile.write('</form></center>')
+        s.wfile.write('</form></td></tr></table></center>')
         
     def parse_POST(self):
         ctype, pdict = parse_header(self.headers['content-type'])
@@ -494,24 +538,104 @@ class MyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
             postvars = {}
         return postvars
         
+    def getgid(s):
+        peer = str(s.connection.getpeername()) + str(time.time())
+        return hashlib.sha224(peer).hexdigest()[:16]
+        
     def do_POST(s):
         s.send_response(200)
         s.send_header("Content-type", "text/html")
         s.end_headers()
-        vars = s.parse_POST()
+        tvars = s.parse_POST()
+        vars = {}
+        for v in tvars:
+            vars[v] = tvars[v][0]
+        if s.path.startswith("/submitpre"):
+            required = ["score", "age", "exp"]
+            
+            gid = s.getgid()
+            print vars
+            if "gid" in vars and vars["gid"]:
+                gid = vars["gid"]
+            for r in required:
+                if r not in vars or not vars[r]:
+                    print r, "not available", vars
+                    return s.presurvey(gid, True)
+            if gid not in participants:
+                print gid, "not in participants", participants
+                return s.presurvey(gid, True)
+            
+            for r in required:
+                print >> participants[gid], r, vars[r]
+            treatments = [("intentional", 1), ("intentional", 2), ("intentional", 3), ("intentional", 4), ("intentional", 5),
+                          ("outer", 1), ("outer", 2), ("outer", 3), ("outer", 4), ("outer", 5),
+                          ("full", 1), ("full", 2), ("full", 3), ("full", 4), ("full", 5)]
+            random.seed(None)
+            t = random.choice(treatments)            
+            type = t[0]
+            if type in ais:
+                ai = ais[type](type, 0)
+            turn = 1
+            player = HTTPPlayer("You", 1)
+            log = file("log/game%s.log"%gid, "w")
+            print >>log, "Treatment:", t
+            random.seed(t[1])
+            game = hanabi.Game([ai,player], log=log, format=1)
+            game.treatment = t
+            game.ping = time.time()
+            game.dopostsurvey = True
+            game.started = False
+            todelete = []
+            for g in games:
+                if games[g][0].ping + 3600 < time.time():
+                    todelete.append(g)
+            for g in todelete:
+                del games[g]
+            games[gid] = (game,player,turn)
+            s.wfile.write("<html><head><title>Hanabi</title></head>")
+            s.wfile.write('<body>')
+            
+            s.wfile.write(show_game_state(game, player, turn, gid))
+           
+            s.wfile.write("</body></html>")
+        elif s.path.startswith("/submitpost"):
+            required = ["intention", "skill", "like"]
+            
+            gid = s.getgid()
+            if "gid" in vars and vars["gid"]:
+                gid = vars["gid"]
+            for r in required:
+                if r not in vars or not vars[r]:
+                    return s.postsurvey(gid, True)
+            if gid not in participants:
+                return s.postsurvey(gid, True)
+            
+            for r in required:
+                print >> participants[gid], r, vars[r]
+            participants[gid].close()
+            s.wfile.write("<html><head><title>Hanabi</title></head>")
+            s.wfile.write('<body><center>')
+            s.wfile.write("<h1>Thank you for your participation in this study!</h1>")
+            
+            s.wfile.write('<a href="/new/intentional">Play again</a>')
+            
+            s.wfile.write('</body></html>')
+            
         
     def consentform(s):
         s.wfile.write(consent.consent)
-        s.wfile.write('<a href="/presurvey">By clicking here I agree to participate in the study</a>')
+        s.wfile.write('<center><font size="12"><a href="/presurvey">By clicking here I agree to participate in the study</a></font></center><br/><br/><br/>')
         
  
 if __name__ == '__main__':
     server_class = BaseHTTPServer.HTTPServer
     httpd = server_class((HOST_NAME, PORT_NUMBER), MyHandler)
-    sys.stderr.write(time.asctime() + " Server Starts - %s:%s" % (HOST_NAME, PORT_NUMBER))
+    errlog.write(time.asctime() + " Server Starts - %s:%s\n" % (HOST_NAME, PORT_NUMBER))
+    errlog.flush()
     try:
        httpd.serve_forever()
     except KeyboardInterrupt:
      pass
     httpd.server_close()
-    sys.stderr.write(time.asctime() +  " Server Stops - %s:%s" % (HOST_NAME, PORT_NUMBER))
+    errlog.write(time.asctime() +  " Server Stops - %s:%s\n" % (HOST_NAME, PORT_NUMBER))
+    errlog.flush()

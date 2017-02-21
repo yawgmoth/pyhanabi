@@ -1,10 +1,11 @@
 
 
-consent = """North Carolina State University<br/> 
-INFORMED CONSENT FORM for RESEARCH<br/>
-Title of Study: Intentional Hanabi AI<br/>
-Principal Investigator:	Markus Eger <br/>
-Faculty Sponsor : Dr. Chris Martens<br/>
+consent = """<center><table width="600px"><tr><td>
+<font size="16"><b>NC State University<br/> </font>
+INFORMED CONSENT FORM for RESEARCH<br/></b>
+<b>Title of Study:</b> Intentional Hanabi AI<br/>
+<b>Principal Investigator:</b>	Markus Eger <br/>
+<b>Faculty Sponsor:</b> Dr. Chris Martens<br/>
 
 
 <h2>What are some general things you should know about research studies?</h2>
@@ -37,5 +38,5 @@ Faculty Sponsor : Dr. Chris Martens<br/>
 <p>If you feel you have not been treated according to the descriptions in this form, or your rights as a participant in research have been violated during the course of this project, you may contact Deb Paxton, Regulatory Compliance Administrator at dapaxton@ncsu.edu or by phone at 1-919-515-4514.</p>
 
 <h2>Consent To Participate</h2>
-I have read and understand the above information.  I have received a copy of this form. I agree to participate in this study with the understanding that I may choose not to participate or to stop participating at any time without penalty or loss of benefits to which I am otherwise entitled.
+I have read and understand the above information.  I have received a copy of this form. I agree to participate in this study with the understanding that I may choose not to participate or to stop participating at any time without penalty or loss of benefits to which I am otherwise entitled.</td></tr></table></center>
 """
