@@ -5,6 +5,7 @@ import os
 import hanabi
 import random
 import hashlib
+import tutorial
 import sys
 import traceback
 import consent
@@ -17,8 +18,14 @@ HAND = 0
 TRASH = 1
 BOARD = 2
 
+debug = False
+
+
 errlog = sys.stdout
-errlog = file("hanabi.log", "w")
+if not debug:
+    errlog = file("hanabi.log", "w")
+
+
 
 template = """
 
@@ -99,7 +106,11 @@ def format_action((i,(action,pnr,card)), gid):
         else:
             result += str(action.num) + "s"
     if i == 0:
-        return "<b>" + result + '</b> <a href="/gid%s/explain" target="_blank">(Explain)</a><br/>'%gid
+        explainlink = ''
+        if debug:
+            explainlink =  '<a href="/gid%s/explain" target="_blank">(Explain)</a>'%gid
+        
+        return "<b>" + result + '</b>%s<br/>'%explainlink
     return result
 
 def show_game_state(game, player, turn, gid):
@@ -397,7 +408,7 @@ class MyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
             
             return
             
-        if path.startswith("/explain"):
+        if path.startswith("/explain") and debug:
             s.show_explanation(game)
             return 
             
@@ -480,20 +491,29 @@ class MyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
         s.wfile.write('<form action="/submitpre" method="POST">')
         if warn:
             s.wfile.write('<font color="red">All questions are mandatory</font><br/>')
-        s.add_question("age", "What is your age?")
+        s.add_choice("age", "What is your age?", [("20s", "18-29 years"), ("30s", "30-39 years"), ("40s", "40-49 years"), ("50s", "50-64 years"), ("na", "Prefer not to answer")])
+        s.add_choice("bgg", "How familiar are you with the board and card games in general?", 
+                            [("new", "I never play board or card games"),
+                             ("dabbling", "I rarely play board or card games"),
+                             ("intermediate", "I sometimes play board or card games"),
+                             ("expert", "I often play board or card games")])
+        s.add_choice("gamer", "Do you consider yourself to be a (board) gamer?", 
+                            [("yes", "Yes"),
+                             ("no", "No")])
         s.add_choice("exp", "How familiar are you with the card game Hanabi?", 
                             [("new", "I have never played"),
                              ("dabbling", "I have played a few (1-10) times"),
                              ("intermediate", "I have played multiple (10-50) times"),
                              ("expert", "I have played many (&gt; 50) times")])
-        s.add_choice("score", "How often do you typically reach the top score of 25?", 
+        s.add_choice("score", "How often do you typically reach the top score of 25 in Hanabi?", 
                               [("never", "I never reach the top score, or I have never played Hanabi"),
                                ("few", "I almost never reach the top score (about one in 50 or more games)"),
                                ("sometimes", "I sometimes reach the top score (about one in 6-20 games)"),
                                ("often", "I often reach the top score (about one in 5 or fewer games)")])
+        
         s.wfile.write("<p>")
         s.wfile.write('<input name="gid" type="hidden" value="%s"/>\n'%gid)
-        s.wfile.write('<input type="submit" value="continue"/>\n')
+        s.wfile.write('<input type="submit" value="Continue"/>\n')
         s.wfile.write('</form></td></tr></table></center>')
         
     def postsurvey(s, gid, warn=False):
@@ -501,13 +521,16 @@ class MyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
         s.wfile.write('<table width="600px">\n<tr><td>')
         s.wfile.write('<form action="/submitpost" method="POST">')
         if warn:
-            s.wfile.write('<font color="red">All questions are mandatory</font><br/>')
+            s.wfile.write('<font color="red">')
+        s.wfile.write("All questions are mandatory")
+        if warn:
+            s.wfile.write('</font><br/>')
         s.add_choice("intention", "How intentional/goal-directed did you think this AI was playing?", 
-                            [("1", "1 - Never performed goal-directed actions"),
-                             ("2", "2 - Rarely performed goal-directed actions"),
-                             ("3", "3 - Sometimes performed goal-directed actions"),
-                             ("4", "4 - Often performed goal-directed actions"),
-                             ("5", "5 - Always performed goal-directed actions")])
+                            [("1", "Never performed goal-directed actions"),
+                             ("2", "Rarely performed goal-directed actions"),
+                             ("3", "Sometimes performed goal-directed actions"),
+                             ("4", "Often performed goal-directed actions"),
+                             ("5", "Always performed goal-directed actions")])
         s.add_choice("skill", "How would you rate the play skill of this AI?", 
                               [("vbad", "The AI played very badly"),
                                ("bad", "The AI played badly"),
@@ -522,7 +545,7 @@ class MyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
                                ("vlike", "I really liked playing with this AI")])
         s.wfile.write("<p>")
         s.wfile.write('<input name="gid" type="hidden" value="%s"/>\n'%gid)
-        s.wfile.write('<input type="submit"/>\n')
+        s.wfile.write('<input type="submit" value="Finish"/>\n')
         s.wfile.write('</form></td></tr></table></center>')
         
     def parse_POST(self):
@@ -551,22 +574,38 @@ class MyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
         for v in tvars:
             vars[v] = tvars[v][0]
         if s.path.startswith("/submitpre"):
-            required = ["score", "age", "exp"]
+            required = ["score", "age", "exp", "bgg", "gamer"]
             
             gid = s.getgid()
-            print vars
             if "gid" in vars and vars["gid"]:
                 gid = vars["gid"]
             for r in required:
                 if r not in vars or not vars[r]:
-                    print r, "not available", vars
                     return s.presurvey(gid, True)
             if gid not in participants:
-                print gid, "not in participants", participants
+                print >>errlog, gid, "not in participants", participants
                 return s.presurvey(gid, True)
             
             for r in required:
                 print >> participants[gid], r, vars[r]
+            
+            s.wfile.write("<html><head><title>Hanabi</title></head>")
+            s.wfile.write('<body><center>')
+            s.wfile.write(tutorial.intro)
+            
+            s.wfile.write('<form action="/tutorialdone" method="POST"><input type="hidden" value="%s" name="gid"/><input type="submit" value="Continue"/></form>'%(gid))
+            
+            s.wfile.write(tutorial.summary)
+            
+            s.wfile.write('</center></body></html>')
+            
+        elif s.path.startswith("/tutorialdone"):
+            gid = s.getgid()
+            if "gid" in vars and vars["gid"]:
+                gid = vars["gid"]
+            if gid not in participants:
+                print >>errlog, gid, "not in participants", participants
+                return s.presurvey(gid, True)
             treatments = [("intentional", 1), ("intentional", 2), ("intentional", 3), ("intentional", 4), ("intentional", 5),
                           ("outer", 1), ("outer", 2), ("outer", 3), ("outer", 4), ("outer", 5),
                           ("full", 1), ("full", 2), ("full", 3), ("full", 4), ("full", 5)]
@@ -617,7 +656,7 @@ class MyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
             s.wfile.write('<body><center>')
             s.wfile.write("<h1>Thank you for your participation in this study!</h1>")
             
-            s.wfile.write('<a href="/new/intentional">Play again</a>')
+            s.wfile.write('<a href="/new/study/%s">Play again</a><br/>(Any additional games you play will also be recorded for future analysis)'%(gid))
             
             s.wfile.write('</body></html>')
             

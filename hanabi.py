@@ -1346,7 +1346,7 @@ class NullStream(object):
     def write(self, *args):
         pass
         
-random.seed(1)
+random.seed(123)
 
 playertypes = {"random": Player, "inner": InnerStatePlayer, "outer": OuterStatePlayer, "self": SelfRecognitionPlayer, "intentional": IntentionalPlayer, "sample": SamplingRecognitionPlayer, "full": SelfIntentionalPlayer}
 names = ["Shangdi", "Yu Di", "Tian", "Nu Wa", "Pangu"]
