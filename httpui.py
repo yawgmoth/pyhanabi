@@ -17,6 +17,7 @@ from serverconf import HOST_NAME, PORT_NUMBER
 HAND = 0
 TRASH = 1
 BOARD = 2
+TRASHP = 3
 
 debug = False
 
@@ -30,13 +31,22 @@ if not debug:
 template = """
 
 <table width="100%%">
-<tr><td width="15%%" valign="top"><center><h2>Trash</h2></center><br/> 
+<tr><td width="15%%" valign="top"><br/> 
+
+<table style="font-size:14pt" width="100%%">
+<tr><td>
+<table width="100%%" style="font-size:14pt"> 
+<tr><td width="85%%"><b>Hint tokens left:</b></td><td> %s</td></tr>
+<tr><td><b>Mistakes made so far:</b></td><td> %s</td></tr>
+<tr><td><b>Cards left in deck:</b></td><td> %s</td></tr>
+</table></td>
+</tr>
+<tr><td>
+<center><h2>Discarded</h2></center>
 %s
-<br/>
-<br/>
-<b>Hints:</b> %d<br/>
-<b>Mistakes:</b> %d<br/>
-<b>Cards left:</b> %d<br/>
+</td></tr>
+</table>
+</div>
 </td>
 <td>
 <center>
@@ -59,7 +69,10 @@ template = """
 </table>
 </center>
 </td>
-<td width="15%%" valign="top"><center> <h2>Actions</h2> </center><br/>%s</td>
+<td width="15%%" valign="top"><center> <h2>Actions</h2> </center><br/>
+<div style="font-size:14pt">
+%s
+</div></td>
 </tr>
 </table>
 """
@@ -79,6 +92,8 @@ def format_board(game, show, gid):
     if game.done():
         if game.dopostsurvey:
             title = "<h2>Game End<h2>Points: " + str(game.score()) + '<br/><a href="/postsurvey/%s">Continue</a>'%gid
+        elif game.study:
+            title = "<h2>Game End<h2>Points: " + str(game.score()) + '<br/><a href="/new/study/%s">Play again</a>'%gid
         else:
             title = "<h2>Game End<h2>Points: " + str(game.score()) + '<br/><a href="/restart/">New game</a>'
     def make_board_image((i,card)):
@@ -95,10 +110,13 @@ def format_action((i,(action,pnr,card)), gid):
         result = "AI "
         other = "you"
         otherp = "your"
+    if i <= 1:
+        result += " just "
+     
     if action.type == hanabi.PLAY:
-        result += " played " + hanabi.format_card(card)
+        result += " played <b>" + hanabi.format_card(card) + "</b>"
     elif action.type == hanabi.DISCARD:
-        result += " discard " + hanabi.format_card(card)
+        result += " discarded <b>" + hanabi.format_card(card) + "</b>"
     else:
         result += " hinted %s about all %s "%(other, otherp)
         if action.type == hanabi.HINT_COLOR:
@@ -110,8 +128,10 @@ def format_action((i,(action,pnr,card)), gid):
         if debug:
             explainlink =  '<a href="/gid%s/explain" target="_blank">(Explain)</a>'%gid
         
-        return "<b>" + result + '</b>%s<br/>'%explainlink
-    return result
+        return "<b>" + result + '</b>%s<br/><br/>'%explainlink
+    if i == 1:
+        return result + '<br/><br/>'
+    return '<div style="color: gray;">' + result + '</div>'
 
 def show_game_state(game, player, turn, gid):
     
@@ -143,17 +163,58 @@ def show_game_state(game, player, turn, gid):
     while len(yourcards) < 10:
         yourcards.append("")
     board = format_board(game, player.show, gid)
-    foundtrash = [False]
+    foundtrash = []
     def format_trash(c):
         result = hanabi.format_card(c)
         if (TRASH, 0, -1) in player.show and c == game.trash[-1] and not foundtrash[0]:
             foundtrash[0] = True
-            return '<font color="red">'+ result + "</font>"
+            return result + "<b>(just discarded)</b>"
+        if (TRASHP, 0, -1) in player.show and c == game.trash[-1] and not foundtrash[0]:
+            foundtrash[0] = True
+            return result + "<b>(just played)</b>"
         return result
     localtrash = game.trash[:]
     localtrash.sort()
-    trash = ["<br/>".join(map(format_trash, localtrash))]
-    args = tuple(trash + [game.hints, 3-game.hits, len(game.deck)] + aicards + [board] + yourcards + ["<br/>".join(map(lambda x: format_action(x,gid), enumerate(list(reversed(player.actions))[:25])))])
+    discarded = {}
+    trashhtml = '<table width="100%%" style="border-collapse: collapse"><tr>\n'
+    for i,c in enumerate(hanabi.ALL_COLORS):
+        style = "border-bottom: 1px solid #000"
+        if i > 0:
+            style += "; border-left: 1px solid #000"
+        trashhtml += '<td valigh="top" align="center" style="%s" width="20%%">%s</td>\n'%(style, hanabi.COLORNAMES[c])
+        discarded[c] = []
+        for (col,num) in game.trash:
+            if col == c:
+                if (TRASH, 0, -1) in player.show and (col,num) == game.trash[-1] and (col,num) not in foundtrash:
+                    foundtrash.append((col,num))
+                    discarded[c].append('<div style="color: red;">%d</div>'%(num))
+                elif (TRASH, 0, -2) in player.show and (col,num) == game.trash[-2] and (col,num) not in foundtrash:
+                    foundtrash.append((col,num))
+                    discarded[c].append('<div style="color: red;">%d</div>'%(num))
+                else:
+                    discarded[c].append('<div>%d</div>'%num)
+        discarded[c].sort()
+    trashhtml += '</tr><tr style="height: 150pt">\n'
+    for i,c in enumerate(hanabi.ALL_COLORS):
+        style= ' style="vertical-align:top"'
+        if i > 0:
+            style=  ' style="border-left: 1px solid #000; vertical-align:top"'
+        trashhtml += '<td valigh="top" align="center" %s>%s</td>\n'%(style, "\n".join(discarded[c]))
+    trashhtml += "</tr></table><br/>"
+    if foundtrash:
+        trashhtml += 'Cards written in <font color="red">red</font> have been discarded or misplayed since your last turn.'
+    
+    trash = [trashhtml] #["<br/>".join(map(format_trash, localtrash))]
+    hints = game.hints
+    if hints == 0:
+        hints = '<div style="font-weight: bold; font-size: 20pt">0</div>'
+    mistakes = 3-game.hits
+    if mistakes == 2:
+        mistakes = '<div style="font-weight: bold; font-size: 20pt; color: red">2</div>'
+    cardsleft = len(game.deck)
+    if cardsleft < 5:
+        cardsleft = '<div style="font-weight: bold; font-size: 20pt">%d</div>'%cardsleft
+    args = tuple([str(hints), str(mistakes), str(cardsleft)] + trash + aicards + [board] + yourcards + ["\n".join(map(lambda x: format_action(x,gid), enumerate(list(reversed(player.actions))[:15])))])
     return template%args
 
 
@@ -164,7 +225,7 @@ def make_circle(x, y, col):
     r1 = r0 + 360
     result = """
     <circle cx="%f" cy="%d" r="10" stroke="%s" stroke-width="4" fill="none">
-       <animate attributeName="r" from="1" to="25" dur="2s" repeatCount="indefinite"/>
+       <animate attributeName="r" from="1" to="22" dur="2s" repeatCount="indefinite"/>
        <animate attributeName="stroke-dasharray" values="32, 32; 16, 16; 8,8; 4,4; 2,6; 1,7;" dur="2s" repeatCount="indefinite" calcMode="discrete"/>
        <animateTransform attributeName="transform" attributeType="XML" type="rotate" from="%f %f %f" to="%f %f %f" dur="2s" begin="0s" repeatCount="indefinite"/>
     </circle>
@@ -174,27 +235,31 @@ def make_circle(x, y, col):
 
 def make_card_image((col,num), links=[], highlight=False):
     image = """
-<svg version="1.1" width="125" height="200" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
-    <rect width="125" height="200" x="0" y="0" fill="#66ccff"%s/>
+<svg version="1.1" width="125" height="160" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+    <rect width="125" height="160" x="0" y="0" fill="#66ccff"%s/>
     <text x="8" y="24" fill="%s" font-family="Arial" font-size="24" stroke="black">%s</text>
     <text x="50" y="24" fill="%s" font-family="Arial" font-size="24" stroke="black">%s</text>
     %s
     %s
-    <text x="108" y="190" fill="%s" font-family="Arial" font-size="24" stroke="black">%s</text>
+    <text x="108" y="155" fill="%s" font-family="Arial" font-size="24" stroke="black">%s</text>
 </svg>
 """
-    ly = 155
+    ly = 130
     linktext = ""
     for (text,target) in links:
         linktext += """<a xlink:href="%s">
                            <text x="8" y="%d" fill="blue" font-family="Arial" font-size="12" text-decoration="underline">%s</text>
                        </a>
                        """%(target, ly, text)
-        ly += 25
+        ly += 23
     l = 35 # left
     r = 90 # right
     c = 62 # center (horizontal)
-    circles = {0: [], 1: [(c,100)], 2: [(l,75),(r,125)], 3: [(l,125), (r,125), (c,75)], 4: [(l,125), (r,125), (l,75), (r,75)], 5:[(l,125), (r,125), (l,75), (r,75), (c,100)]}
+    
+    t = 45 # top
+    m = 70 # middle (vertical)
+    b = 95 # bottom
+    circles = {0: [], 1: [(c,m)], 2: [(l,t),(r,b)], 3: [(l,b), (r,b), (c,t)], 4: [(l,b), (r,b), (l,t), (r,t)], 5:[(l,b), (r,b), (l,t), (r,t), (c,m)]}
     circ = "\n".join(map(lambda (x,y): make_circle(x,y,hanabi.COLORNAMES[col]), circles[num]))
     highlighttext = ""
     if highlight:
@@ -204,20 +269,20 @@ def make_card_image((col,num), links=[], highlight=False):
     
 def unknown_card_image(links=[], highlight=False):
     image = """
-<svg version="1.1" width="125" height="200" xmlns="http://www.w3.org/2000/svg">
-    <rect width="125" height="200" x="0" y="0" fill="#66ccff"%s/>
+<svg version="1.1" width="125" height="160" xmlns="http://www.w3.org/2000/svg">
+    <rect width="125" height="160" x="0" y="0" fill="#66ccff"%s/>
     %s
-    <text x="25" y="145" fill="black" font-family="Arial" font-size="128">?</text>
+    <text x="35" y="90" fill="black" font-family="Arial" font-size="100">?</text>
 </svg>
 """
-    ly = 155
+    ly = 130
     linktext = ""
     for (text,target) in links:
         linktext += """<a xlink:href="%s">
                            <text x="8" y="%d" fill="blue" font-family="Arial" font-size="12" text-decoration="underline">%s</text>
                        </a>
                        """%(target, ly, text)
-        ly += 25
+        ly += 23
     highlighttext= ""
     if highlight:
         highlighttext = ' stroke="red" stroke-width="4"'
@@ -225,6 +290,7 @@ def unknown_card_image(links=[], highlight=False):
     
 games = {}
 participants = {}
+participantstarts = {}
 player = None
 turn = 0
 
@@ -282,12 +348,27 @@ class HTTPPlayer(hanabi.Player):
                     newshow.append((where,who,what))
             self.show = newshow
         if action.type == hanabi.DISCARD:
+            newshow = []
+            for (t,w1,w2) in self.show:
+                if t == TRASH:
+                    newshow.append((t,w1,w2-1))
+                else:
+                    newshow.append((t,w1,w2))
+            self.show = newshow
             self.show.append((TRASH,0,-1))
+            
         elif action.type == hanabi.PLAY:
             (col,num) = game.hands[player][action.cnr]
             if game.board[col][1] + 1 == num:
                 self.show.append((BOARD,0,col))
             else:
+                newshow = []
+                for (t,w1,w2) in self.show:
+                    if t == TRASH:
+                        newshow.append((t,w1,w2-1))
+                    else:
+                        newshow.append((t,w1,w2))
+                self.show = newshow
                 self.show.append((TRASH,0,-1))
         if player == self.pnr and action.type in [hanabi.PLAY, hanabi.DISCARD]:
             del self.knows[action.cnr]
@@ -310,6 +391,16 @@ class MyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
         except Exception:
             errlog.write(traceback.format_exc())
             errlog.flush()
+            
+    def invalid(s, gid):
+        if len(gid) != 16:
+            return True
+        for c in gid:
+            if c not in "0123456789abcdef":
+                return True
+        if not os.path.exists("log/game%s.log"%gid):
+            return True
+        return False
     
     def perform_response(s):
         """Respond to a GET request."""
@@ -325,6 +416,15 @@ class MyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
             if gid in games:
                 game, player, turn = games[gid]
             path = s.path[20:]
+        
+        if s.path == "/hanabiui.png":
+            f = open("hanabiui.png", "rb")
+            s.send_response(200)
+            s.send_header("Content-type", "image/png")
+            s.end_headers()
+            shutil.copyfileobj(f, s.wfile)
+            f.close()
+            return
         
         if s.path.startswith("/favicon"):
             s.send_response(200)
@@ -351,10 +451,32 @@ class MyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
         s.send_header("Content-type", "text/html")
         s.end_headers()
         
-        if s.path.startswith("/presurvey"):
+        
+        if path.startswith("/tutorial"):
             gid = s.getgid()
+            todelete = []
+            try:
+                for g in participantstarts:
+                    if participantstarts[g] + 7200 < time.time():
+                        todelete.append(g)
+                for d in todelete:
+                    del participants[d]
+                    del participantstarts[d]
+            except Exception:
+                errlog.write("Error cleaning participants:\n")
+                errlog.write(traceback.format_exc())
             participants[gid] = file("log/survey%s.log"%gid, "w")
-            s.presurvey(gid)
+            participantstarts[gid] = time.time()
+            
+            s.wfile.write("<html><head><title>Hanabi</title></head>")
+            s.wfile.write('<body><center>')
+            s.wfile.write(tutorial.intro)
+            
+            s.wfile.write('<form action="/tutorialdone" method="POST"><input type="hidden" value="%s" name="gid"/><input type="submit" value="Continue"/></form>'%(gid))
+            
+            s.wfile.write(tutorial.summary)
+            
+            s.wfile.write('</center></body></html>')
             return
             
         if s.path.startswith("/postsurvey/"):
@@ -364,12 +486,54 @@ class MyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
             return
             
             
-        if s.path.startswith("/consent"): # or s.path == "/":
+        if s.path.startswith("/consent") or s.path == "/":
             s.consentform()
-            
             return
         
-        if path.startswith("/new/"):
+        if path.startswith("/new/study/"):
+            oldgid = path[11:]
+            if s.invalid(oldgid):
+                s.wfile.write("<html><head><title>Hanabi</title></head>\n")
+                s.wfile.write('<body><h1>Invalid Game ID</h1>\n')
+                s.wfile.write("</body></html>")
+                return
+            
+            gid = s.getgid()
+            
+            treatments = [("intentional", 1), ("intentional", 2), ("intentional", 3), ("intentional", 4), ("intentional", 5),
+                          ("outer", 1), ("outer", 2), ("outer", 3), ("outer", 4), ("outer", 5),
+                          ("full", 1), ("full", 2), ("full", 3), ("full", 4), ("full", 5)]
+            random.seed(None)
+            t = random.choice(treatments)
+            nr = random.randint(6,10000)
+            type = t[0]
+            t = (type,nr)
+            if type in ais:
+                ai = ais[type](type, 0)
+            turn = 1
+            player = HTTPPlayer("You", 1)
+            log = file("log/game%s.log"%gid, "w")
+            print >>log, "Old GID:", oldgid
+            print >>log, "Treatment:", t
+            random.seed(nr)
+            game = hanabi.Game([ai,player], log=log, format=1)
+            game.treatment = t
+            game.ping = time.time()
+            game.started = False
+            game.study = True
+            todelete = []
+            for g in games:
+                if games[g][0].ping + 3600 < time.time():
+                    todelete.append(g)
+            for g in todelete:
+                del games[g]
+            games[gid] = (game,player,turn)
+            
+            
+        
+        elif path.startswith("/new/") and debug:
+            
+        
             type = s.path[5:]
             if type in ais:
                 ai = ais[type](type, 0)
@@ -393,6 +557,10 @@ class MyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
             
         
         if gid is None or game is None or path.startswith("/restart/"):
+            s.wfile.write("<html><head><title>Hanabi</title></head>\n")
+            s.wfile.write('<body><h1>Invalid Game ID</h1>\n')
+            s.wfile.write("</body></html>")
+            return
             if game is not None:
                 del game
             if gid is not None and gid in games:
@@ -470,12 +638,15 @@ class MyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
         
         s.wfile.write("</body></html>")
         
-    def add_choice(s, name, question, answers):
+    def add_choice(s, name, question, answers, default=-1):
         s.wfile.write("<p>")
         s.wfile.write(question + "<br/>")
         s.wfile.write('<fieldset id="%s">\n'%name)
-        for (aname,text) in answers:
-             s.wfile.write('<input name="%s" type="radio" value="%s">%s</option><br/>\n'%(name,aname,text))
+        for i,(aname,text) in enumerate(answers):
+             if i == default:
+                 s.wfile.write('<input name="%s" type="radio" value="%s" checked="checked">%s</option><br/>\n'%(name,aname,text))
+             else:
+                 s.wfile.write('<input name="%s" type="radio" value="%s">%s</option><br/>\n'%(name,aname,text))
         s.wfile.write("</fieldset>\n")
         s.wfile.write("</p>")
         
@@ -486,11 +657,9 @@ class MyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
         s.wfile.write("</p>")
         
     def presurvey(s, gid, warn=False):
-        s.wfile.write('<center><h1>Welcome to the Hanabi AI experiment</h1>')
+        s.wfile.write('<center><h1>Finally, please answer some question about previous board game experience</h1>')
         s.wfile.write('<table width="600px">\n<tr><td>')
-        s.wfile.write('<form action="/submitpre" method="POST">')
-        if warn:
-            s.wfile.write('<font color="red">All questions are mandatory</font><br/>')
+        s.wfile.write('<form action="/submitpost2" method="POST">')
         s.add_choice("age", "What is your age?", [("20s", "18-29 years"), ("30s", "30-39 years"), ("40s", "40-49 years"), ("50s", "50-64 years"), ("na", "Prefer not to answer")])
         s.add_choice("bgg", "How familiar are you with the board and card games in general?", 
                             [("new", "I never play board or card games"),
@@ -501,30 +670,33 @@ class MyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
                             [("yes", "Yes"),
                              ("no", "No")])
         s.add_choice("exp", "How familiar are you with the card game Hanabi?", 
-                            [("new", "I have never played"),
+                            [("new", "I have never played before participating in this experiment"),
                              ("dabbling", "I have played a few (1-10) times"),
                              ("intermediate", "I have played multiple (10-50) times"),
                              ("expert", "I have played many (&gt; 50) times")])
+        s.add_choice("recent", "When was the last time that you played Hanabi before this experiment?", 
+                            [("never", "I have never played before or can't remember when I played the last time"),
+                             ("long", "The last time I played has been a long time (over a year) ago"),
+                             ("medium", "The last time I played has been some time (between 3 months and a year) ago"),
+                             ("recent", "The last time I played was recent (up to 3 months ago)")])
         s.add_choice("score", "How often do you typically reach the top score of 25 in Hanabi?", 
                               [("never", "I never reach the top score, or I have never played Hanabi"),
                                ("few", "I almost never reach the top score (about one in 50 or more games)"),
                                ("sometimes", "I sometimes reach the top score (about one in 6-20 games)"),
                                ("often", "I often reach the top score (about one in 5 or fewer games)")])
-        
+        s.add_choice("publish", "Do you agree that the answers you provided and a log of the actions you performed in the game you played are made publicly available? This data will be completely anonymous and <b>not</b> include any other information such as an IP address that could be linked back to you.", 
+                              [("yes", "Yes"),
+                               ("no", "No")], 0)
         s.wfile.write("<p>")
         s.wfile.write('<input name="gid" type="hidden" value="%s"/>\n'%gid)
         s.wfile.write('<input type="submit" value="Continue"/>\n')
         s.wfile.write('</form></td></tr></table></center>')
         
     def postsurvey(s, gid, warn=False):
-        s.wfile.write('<center><h1>Questionaire</h1>')
+        s.wfile.write('<center><h1>Please answer some questions about your experience with the AI</h1>')
         s.wfile.write('<table width="600px">\n<tr><td>')
         s.wfile.write('<form action="/submitpost" method="POST">')
-        if warn:
-            s.wfile.write('<font color="red">')
-        s.wfile.write("All questions are mandatory")
-        if warn:
-            s.wfile.write('</font><br/>')
+        
         s.add_choice("intention", "How intentional/goal-directed did you think this AI was playing?", 
                             [("1", "Never performed goal-directed actions"),
                              ("2", "Rarely performed goal-directed actions"),
@@ -538,7 +710,7 @@ class MyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
                                ("good", "The AI played well"),
                                ("vgood", "The AI played very well")])
         s.add_choice("like", "How much did you enjoy playing with this AI?", 
-                              [("vhate", "I greatly disliked playing with this AI"),
+                              [("vhate", "I really disliked playing with this AI"),
                                ("hate", "I somewhat disliked playing with this AI"),
                                ("neutral", "I neither liked nor disliked playing with this AI"),
                                ("like", "I somewhat liked playing with this AI"),
@@ -562,7 +734,7 @@ class MyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
         return postvars
         
     def getgid(s):
-        peer = str(s.connection.getpeername()) + str(time.time())
+        peer = str(s.connection.getpeername()) + str(time.time()) + str(os.urandom(4))
         return hashlib.sha224(peer).hexdigest()[:16]
         
     def do_POST(s):
@@ -573,39 +745,41 @@ class MyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
         vars = {}
         for v in tvars:
             vars[v] = tvars[v][0]
-        if s.path.startswith("/submitpre"):
-            required = ["score", "age", "exp", "bgg", "gamer"]
+        if s.path.startswith("/submitpost2"):
+            required = ["score", "age", "recent", "exp", "bgg", "gamer", "publish"]
             
             gid = s.getgid()
             if "gid" in vars and vars["gid"]:
                 gid = vars["gid"]
-            for r in required:
-                if r not in vars or not vars[r]:
-                    return s.presurvey(gid, True)
+
             if gid not in participants:
                 print >>errlog, gid, "not in participants", participants
-                return s.presurvey(gid, True)
+                return s.presurvey(gid)
             
             for r in required:
-                print >> participants[gid], r, vars[r]
+                if r in vars:
+                    print >> participants[gid], r, vars[r]
+                
+            participants[gid].close()
             
             s.wfile.write("<html><head><title>Hanabi</title></head>")
             s.wfile.write('<body><center>')
-            s.wfile.write(tutorial.intro)
+            s.wfile.write("<h1>Thank you for your participation in this study!</h1>")
             
-            s.wfile.write('<form action="/tutorialdone" method="POST"><input type="hidden" value="%s" name="gid"/><input type="submit" value="Continue"/></form>'%(gid))
+            s.wfile.write('<a href="/new/study/%s">Play again</a><br/>(You can bookmark this link and play again at any later time. <br/>Any additional games you play will also be recorded for future analysis)'%(gid))
             
-            s.wfile.write(tutorial.summary)
+            s.wfile.write('</body></html>')
+            del participants[gid]
+            del participantstarts[gid]
             
-            s.wfile.write('</center></body></html>')
             
         elif s.path.startswith("/tutorialdone"):
             gid = s.getgid()
             if "gid" in vars and vars["gid"]:
                 gid = vars["gid"]
             if gid not in participants:
-                print >>errlog, gid, "not in participants", participants
-                return s.presurvey(gid, True)
+                participants[gid] = file("log/survey%s.log"%gid, "w")
+                participantstarts[gid] = time.time()
             treatments = [("intentional", 1), ("intentional", 2), ("intentional", 3), ("intentional", 4), ("intentional", 5),
                           ("outer", 1), ("outer", 2), ("outer", 3), ("outer", 4), ("outer", 5),
                           ("full", 1), ("full", 2), ("full", 3), ("full", 4), ("full", 5)]
@@ -643,27 +817,23 @@ class MyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
             gid = s.getgid()
             if "gid" in vars and vars["gid"]:
                 gid = vars["gid"]
-            for r in required:
-                if r not in vars or not vars[r]:
-                    return s.postsurvey(gid, True)
+
             if gid not in participants:
-                return s.postsurvey(gid, True)
+                s.wfile.write("<html><head><title>Hanabi</title></head>")
+                s.wfile.write('<body><center>')
+                s.wfile.write("<h1>Session timed out. Thank you for your time and participation</h1>")                
+                s.wfile.write('</body></html>')
+                return
             
             for r in required:
-                print >> participants[gid], r, vars[r]
-            participants[gid].close()
-            s.wfile.write("<html><head><title>Hanabi</title></head>")
-            s.wfile.write('<body><center>')
-            s.wfile.write("<h1>Thank you for your participation in this study!</h1>")
-            
-            s.wfile.write('<a href="/new/study/%s">Play again</a><br/>(Any additional games you play will also be recorded for future analysis)'%(gid))
-            
-            s.wfile.write('</body></html>')
+                if r in vars:
+                    print >> participants[gid], r, vars[r]
+            s.presurvey(gid)
             
         
     def consentform(s):
         s.wfile.write(consent.consent)
-        s.wfile.write('<center><font size="12"><a href="/presurvey">By clicking here I agree to participate in the study</a></font></center><br/><br/><br/>')
+        s.wfile.write('<center><font size="12"><a href="/tutorial">By clicking here I agree to participate in the study</a></font></center><br/><br/><br/>')
         
  
 if __name__ == '__main__':

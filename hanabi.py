@@ -1195,6 +1195,7 @@ class Game(object):
         self.turn = 1
         self.format = format
         self.dopostsurvey = False
+        self.study = False
         if self.format:
             print >> self.log, self.deck
     def make_hands(self):

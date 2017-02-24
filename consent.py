@@ -1,6 +1,6 @@
 
 
-consent = """<center><table width="600px"><tr><td>
+consent = """<center><table width="800px"><tr><td>
 <font size="16"><b>NC State University<br/> </font>
 INFORMED CONSENT FORM for RESEARCH<br/></b>
 <b>Title of Study:</b> Intentional Hanabi AI<br/>
@@ -17,7 +17,7 @@ INFORMED CONSENT FORM for RESEARCH<br/></b>
 <p>The purpose of the study is to determine which type of AI plays well with humans in the cooperative card game Hanabi. <b>You must be between 18 and 64 years to participate.</b></p>
 
 <h2>What will happen if you take part in the study?</h2>
-<p>If you agree to participate in this study, you will be asked some basic questions about your experience with board games in general and Hanabi in particular, then play one game of a browser-based implementation of Hanabi with an AI controlled player, and finally answer some questions about your experience with the AI. If you enjoy your experience (and we hope you do), you can also play multiple times. </p>
+<p>If you agree to participate in this study, you will play one game of a browser-based implementation of Hanabi with an AI controlled player, and then answer some questions about your experience with the AI and board games in general. If you enjoy your experience (and we hope you do), you can also play multiple times. </p>
 
 <h2>Risks</h2>
 <p>The risks of this study do not exceed normal computer use. </p>
