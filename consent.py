@@ -27,7 +27,7 @@ INFORMED CONSENT FORM for RESEARCH<br/></b>
 
 
 <h2>Confidentiality</h2>
-<p>The information in the study records will be kept confidential to the full extent allowed by law. Data will be stored securely on a secure computer at NC State University. No reference will be made in oral or written reports which could link you to the study. After the conclusion of the study, the collected demographic information, and any logs of games that you played will be released to the public. Note that none of this information can be linked back to you personally, and that you can choose not to provide your age if you are not comfortable with having this information recorded. 
+<p>The information in the study records will be kept confidential to the full extent allowed by law. Data will be stored securely on a secure computer at NC State University. No reference will be made in oral or written reports which could link you to the study. After the conclusion of the study, the information we gathered will be released to the public to foster further research. Note that none of this information can be linked back to you personally, and that you can choose if you want to be included in the published data at the end of the experiment. 
  </p>
 
 <h2>What if you are a NCSU student?</h2>
