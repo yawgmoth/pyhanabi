@@ -1406,17 +1406,20 @@ def main(args):
     for i,a in enumerate(args):
         players.append(make_player(a, i))
         
-    n = 1
+    n = 10000
     out = NullStream()
     if n < 3:
         out = sys.stdout
     pts = []
     for i in xrange(n):
-        print "Starting game", i+1
+        if (i+1)%100 == 0:
+            print "Starting game", i+1
+        random.seed(i+1)
         g = Game(players, out)
         try:
             pts.append(g.run())
-            print "score", pts[-1]
+            if (i+1)%100 == 0:
+                print "score", pts[-1]
         except Exception:
             import traceback
             traceback.print_exc()
@@ -1425,6 +1428,7 @@ def main(args):
     import numpy
     print "average:", numpy.mean(pts)
     print "stddev:", numpy.std(pts, ddof=1)
+    print "range", min(pts), max(pts)
     
     
 if __name__ == "__main__":
