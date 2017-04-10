@@ -107,7 +107,7 @@ def format_board(game, show, gid):
     args = tuple([title] + boardcards)
     return board_template%args
 
-def format_action((i,(action,pnr,card)), gid):
+def format_action((i,(action,pnr,card)), gid, replay=None):
     result = "You "
     other = "the AI"
     otherp = "their"
@@ -129,9 +129,13 @@ def format_action((i,(action,pnr,card)), gid):
         else:
             result += str(action.num) + "s"
     if i == 0:
-        explainlink = ''
+        link = ''
         if debug:
-            explainlink =  '<a href="/gid%s/explain" target="_blank">(Explain)</a>'%gid
+            if replay:
+                (gid,round,info) = replay
+                explainlink =  '<a href="/replay/%s/%d/explain" target="_blank">(Explain)</a>'%(gid, round)
+            else:
+                explainlink =  '<a href="/gid%s/explain" target="_blank">(Explain)</a>'%gid
         
         return "<b>" + result + '</b>%s<br/><br/>'%explainlink
     if i == 1:
@@ -186,7 +190,7 @@ def show_game_state(game, player, turn, gid, replay=False):
         style = "border-bottom: 1px solid #000"
         if i > 0:
             style += "; border-left: 1px solid #000"
-        trashhtml += '<td valigh="top" align="center" style="%s" width="20%%">%s</td>\n'%(style, hanabi.COLORNAMES[c])
+        trashhtml += '<td valign="top" align="center" style="%s" width="20%%">%s</td>\n'%(style, hanabi.COLORNAMES[c])
         discarded[c] = []
         for (col,num) in game.trash:
             if col == c:
@@ -221,23 +225,30 @@ def show_game_state(game, player, turn, gid, replay=False):
         cardsleft = '<div style="font-weight: bold; font-size: 20pt">%d</div>'%cardsleft
     replaycontrol = ""
     if replay:
-        (gid,round) = replay
+        (gid,round,info) = replay
         replaycontrol = "<br/><br/><br/><br/>"
         if not foundtrash:
              replaycontrol += "<br/><br/><br/>"
-        replaycontrol += '<table style="font-size:14pt" width="100%">'
+        replaycontrol += '<table style="font-size:14pt" width="100%" border="1">'
         replaycontrol += '<tr><td colspan="3">Replay of game ' + gid + '</td></tr>\n'
         replaycontrol += '<tr><td width="33%">'
         if round > 2:
             replaycontrol += '<a href="/replay/%s/%d">&lt;&lt;&lt;</a>'%(gid,round-2)
         else:
             replaycontrol += "&lt;&lt;&lt;"
-        replaycontrol += '</td><td width="33%">'
+        replaycontrol += '</td><td width="33%" align="center">'
         replaycontrol += " Turn " + str(round) 
-        replaycontrol += '</td><td width="33%">'
-        replaycontrol += '<a href="/replay/%s/%d">&gt;&gt;&gt;</a>'%(gid,round+2)
-        replaycontrol += "</td></tr></table>"
-    args = tuple([str(hints), str(mistakes), str(cardsleft)] + trash + [replaycontrol] + aicards + [board] + yourcards + ["\n".join(map(lambda x: format_action(x,gid), enumerate(list(reversed(player.actions))[:15])))])
+        replaycontrol += '</td><td width="33%" align="right">'
+        if game.done():
+            replaycontrol += "&gt;&gt;&gt;"
+        else:
+            replaycontrol += '<a href="/replay/%s/%d">&gt;&gt;&gt;</a>'%(gid,round+2)
+        replaycontrol += "</td></tr>"
+        ai,deck,score = info
+        print info
+        replaycontrol += '<tr><td colspan="3" align="center">%s AI, %s, deck %d</td></tr>'%(ai, format_score(score), deck)
+        replaycontrol += "</table>"
+    args = tuple([str(hints), str(mistakes), str(cardsleft)] + trash + [replaycontrol] + aicards + [board] + yourcards + ["\n".join(map(lambda x: format_action(x,gid, replay), enumerate(list(reversed(player.actions))[:15])))])
     return template%args
 
 
@@ -410,10 +421,48 @@ class ReplayPlayer(hanabi.Player):
     def __init__(self, name, pnr):
         super(ReplayPlayer, self).__init__(name,pnr)
         self.actions = []
+        self.realplayer = None
     def get_action(self, nr, hands, knowledge, trash, played, board, valid_actions, hints):
+        if self.realplayer:
+            self.realplayer.get_action(nr, hands, knowledge, trash, played, board, valid_actions, hints)
         return self.actions.pop(0)
+    def inform(self, action, player, game):
+        if self.realplayer:
+            self.realplayer.inform(action, player, game)
+    def get_explanation(self):
+        if self.realplayer:
+            return self.realplayer.get_explanation()
+        return []
+        
+def get_replay_info(fname):
+    f = open(fname)
+    ai = None
+    deck = None
+    score = None
+    try:
+        for l in f:
+            if l.startswith("Treatment:"):
+                try:
+                    items = l.strip().split()
+                    ai = items[-2].strip("'(,")
+                    deck = int(items[-1].strip(")"))
+                except Exception:
+                    deck = None
+            elif l.startswith("Score"):
+                items = l.strip().split()
+                score = int(items[1])
+    except Exception:
+        pass
+        f.close()
+        return (None, None, None)
+    f.close()
     
-
+    return (ai, deck, score)
+    
+def format_score(sc):
+    if sc is None:
+        return "not finished"
+    return "%d points"%sc
     
                 
 
@@ -472,7 +521,7 @@ class MyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
             s.end_headers()
             return
             
-        # I honestly don't know why, but I already a request for http://www.google.com
+        # I honestly don't know why, but I already received a request for http://www.google.com
         if s.path.startswith("http://"): 
             s.send_response(400)
             s.end_headers()
@@ -603,21 +652,30 @@ class MyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
             
         elif path.startswith("/replay/") and debug:
             gid = path[8:24]
-            round = path[25:]
+            rest = path[25:]
             
+            items = rest.split("/")
+            round = items[0]
+            if len(items) > 1 and items[1] == "explain":
+                path = "/explain"
+            
+            fname = "log/game%s.log"%gid
             try:
                 round = int(round)
             except Exception:
                 import traceback
                 traceback.print_exc()
                 round = None
-            if "/" in gid or "\\" in gid or round is None or not os.path.exists("log/game%s.log"%gid):
+            if "/" in gid or "\\" in gid or round is None or not os.path.exists(fname):
                 s.wfile.write("<html><head><title>Hanabi</title></head>\n")
                 s.wfile.write('<body><h1>Invalid Game ID</h1>\n')
                 s.wfile.write("</body></html>")
                 return
-            replay = (gid,round)
-            f = open("log/game%s.log"%gid)
+            
+            info = get_replay_info(fname)
+            
+            replay = (gid,round,info)
+            f = open(fname)
             players = [ReplayPlayer("AI", 0), ReplayHTTPPlayer("You", 1)]
             i = 0
             def convert(s):
@@ -629,7 +687,9 @@ class MyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
                     try:
                         items = l.strip().split()
                         ai = items[-2].strip("'(,")
+                        players[0].realplayer = ais[ai](ai, 0)
                         deck = int(items[-1].strip(")"))
+                        
                     except Exception:
                         deck = None
                 elif l.startswith("MOVE:"):
@@ -678,10 +738,19 @@ class MyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
             s.wfile.write('<li><a href="/new/full">Fully Intentional Player</a></li>\n')
             s.wfile.write('</ul><br/>')
             s.wfile.write('Or select a replay to view:<br/><ul>')
+            games = []
+            
             for f in os.listdir("log/"):
                 if f.startswith("game"):
                     gid = f[4:20]
-                    s.wfile.write('<li><a href="/replay/%s/1">Game %s</a></li>\n'%(gid, gid))
+                    fname = os.path.join("log", f)
+                    (ai,deck,score) = get_replay_info(fname)
+                    if ai and deck:
+                        entry = '<li><a href="/replay/%s/1">Game %s (%s AI, %s, deck %d)</a></li>\n'%(gid, gid, ai, format_score(score), deck)
+                        games.append(((score if score else -1), entry))
+            games.sort(key=lambda(s,e): -s)
+            for (score,entry) in games:
+                s.wfile.write(entry)
             return
             
         if path.startswith("/explain") and debug:
@@ -738,7 +807,7 @@ class MyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
         
         s.wfile.write('<table border="1">')
         s.wfile.write('<tr><th>Description</th><th>Card 1</th><th>Card 2</th><th>Card 3</th><th>Card 4</th><th>Card 5</th>\n')
-        for line in game.players[0].explanation:
+        for line in game.players[0].get_explanation():
             s.wfile.write('<tr>\n')
             for item in line:
                 s.wfile.write('\t<td>%s</td>\n'%(str(item).replace("\n", "<br/>")))

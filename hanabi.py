@@ -98,11 +98,13 @@ class Action(object):
 class Player(object):
     def __init__(self, name, pnr):
         self.name = name
-        self.explanation = {}
+        self.explanation = []
     def get_action(self, nr, hands, knowledge, trash, played, board, valid_actions, hints):
         return random.choice(valid_actions)
     def inform(self, action, player, game):
         pass
+    def get_explanation(self):
+        return self.explanation
         
 def get_possible(knowledge):
     result = []
@@ -139,7 +141,7 @@ def potentially_discardable(possible, board):
 class InnerStatePlayer(Player):
     def __init__(self, name, pnr):
         self.name = name
-        self.explanation = {}
+        self.explanation = []
     def get_action(self, nr, hands, knowledge, trash, played, board, valid_actions, hints):
         handsize = len(knowledge[0])
         possible = []
@@ -201,7 +203,7 @@ class OuterStatePlayer(Player):
         self.name = name
         self.hints = {}
         self.pnr = pnr
-        self.explanation = {}
+        self.explanation = []
     def get_action(self, nr, hands, knowledge, trash, played, board, valid_actions, hints):
         handsize = len(knowledge[0])
         possible = []
@@ -335,7 +337,7 @@ class SelfRecognitionPlayer(Player):
         self.last_played = []
         self.last_board = []
         self.other = other
-        self.explanation = {}
+        self.explanation = []
     def get_action(self, nr, hands, knowledge, trash, played, board, valid_actions, hints):
         handsize = len(knowledge[0])
         possible = []
@@ -489,7 +491,7 @@ def format_intention(i):
         return "Discard"
     elif i == CANDISCARD:
         return "Can Discard"
-    return "N/A"
+    return "Keep"
     
 def whattodo(knowledge, pointed, board):
     possible = get_possible(knowledge)
@@ -912,7 +914,7 @@ class SamplingRecognitionPlayer(Player):
         self.last_board = []
         self.other = other
         self.maxtime = maxtime
-        self.explanation = {}
+        self.explanation = []
     def get_action(self, nr, hands, knowledge, trash, played, board, valid_actions, hints):
         handsize = len(knowledge[0])
         possible = []
