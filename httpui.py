@@ -145,7 +145,11 @@ def format_action((i,(action,pnr,card)), gid, replay=None):
 def show_game_state(game, player, turn, gid, replay=False):
     
     def make_ai_card((i,(col,num)), highlight):
+    
         hintlinks = [("Hint Rank", "/gid%s/%d/hintrank/%d"%(gid,turn,i)), ("Hint Color", "/gid%s/%d/hintcolor/%d"%(gid,turn,i))]
+        if replay:
+            (pgid,round,info) = replay 
+            hintlinks = [("Hint Rank", "/takeover/%s/%d/hintrank/%d"%(pgid,round,i)), ("Hint Color", "/takeover/%s/%d/hintcolor/%d"%(pgid,round,i))]     
         if game.hints == 0 or game.done() or not game.started:
             hintlinks = []
             highlight = False
@@ -159,6 +163,9 @@ def show_game_state(game, player, turn, gid, replay=False):
         aicards.append("")
     def make_your_card((i,(col,num)), highlight):
         playlinks = [("Play", "/gid%s/%d/play/%d"%(gid,turn,i)), ("Discard", "/gid%s/%d/discard/%d"%(gid,turn,i))]
+        if replay:
+            (pgid,round,info) = replay 
+            playlinks = [("Play", "/takeover/%s/%d/play/%d"%(pgid,round,i)), ("Discard", "/takeover/%s/%d/discard/%d"%(pgid,round,i))]
         if game.done() or not game.started:
             playlinks = []
         return unknown_card_image(playlinks, highlight)
@@ -245,8 +252,13 @@ def show_game_state(game, player, turn, gid, replay=False):
             replaycontrol += '<a href="/replay/%s/%d">&gt;&gt;&gt;</a>'%(gid,round+2)
         replaycontrol += "</td></tr>"
         ai,deck,score = info
-        print info
+        
         replaycontrol += '<tr><td colspan="3" align="center">%s AI, %s, deck %d</td></tr>'%(ai, format_score(score), deck)
+        root = get_replay_root("log/game%s.log"%gid)
+        if root == gid:
+            replaycontrol += '<tr><td colspan="3" align="center"><a href="/showsurvey/%s/full" target="_blank">Show survey answers</a></td></tr>'%root
+        else:
+            replaycontrol += '<tr><td colspan="3" align="center"><a href="/showsurvey/%s" target="_blank">Show survey answers</a></td></tr>'%root
         replaycontrol += "</table>"
     args = tuple([str(hints), str(mistakes), str(cardsleft)] + trash + [replaycontrol] + aicards + [board] + yourcards + ["\n".join(map(lambda x: format_action(x,gid, replay), enumerate(list(reversed(player.actions))[:15])))])
     return template%args
@@ -452,12 +464,23 @@ def get_replay_info(fname):
                 items = l.strip().split()
                 score = int(items[1])
     except Exception:
-        pass
         f.close()
         return (None, None, None)
     f.close()
     
     return (ai, deck, score)
+    
+def get_replay_root(fname):
+    f = open(fname)
+    parent = None
+    for l in f:
+        if l.startswith("Old GID:"):
+            parent = l[8:].strip()
+            break
+    f.close()
+    if parent:
+        return get_replay_root("log/game%s.log"%parent)
+    return fname[8:24]
     
 def format_score(sc):
     if sc is None:
@@ -578,7 +601,7 @@ class MyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
             return
             
             
-        if s.path.startswith("/consent") or s.path == "/":
+        if s.path.startswith("/consent"):
             s.consentform()
             return
         doaction = True
@@ -714,7 +737,199 @@ class MyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
             doaction = False
             turn = -1
             gid = ""
+        elif path.startswith("/starttakeover/"):
+            items = filter(None, path.split("/"))
+            if len(items) < 6:
+                s.wfile.write("<html><head><title>Hanabi</title></head>\n")
+                s.wfile.write('<body><h1>Invalid Game ID</h1>\n')
+                s.wfile.write("</body></html>")
+                return
+            gid, round, ai, action, arg = items[1:]
+            oldgid = gid
+            fname = "log/game%s.log"%gid
+            try:
+                round = int(round)
+            except Exception:
+                import traceback
+                traceback.print_exc()
+                round = None
+            if "/" in gid or "\\" in gid or round is None or not os.path.exists(fname):
+                s.wfile.write("<html><head><title>Hanabi</title></head>\n")
+                s.wfile.write('<body><h1>Invalid Game ID</h1>\n')
+                s.wfile.write("</body></html>")
+                return
             
+            info = get_replay_info(fname)
+            f = open(fname)
+            players = [ReplayPlayer(ai.capitalize(), 0), ReplayHTTPPlayer("You", 1)]
+            players[0].realplayer = ais[ai](ai.capitalize(), 0)
+            i = 0
+            def convert(s):
+                if s == "None":
+                    return None
+                return int(s)
+            for l in f:
+                if l.startswith("Treatment:"):
+                    try:
+                        items = l.strip().split()
+                        deck = int(items[-1].strip(")"))
+                    except Exception:
+                        deck = None
+                elif l.startswith("MOVE:"):
+                    items = map(lambda s: s.strip(), l.strip().split())
+                    const, pnum, type, cnr, pnr, col, num = items
+                    a = hanabi.Action(convert(type), convert(pnr), convert(col), convert(num), convert(cnr))
+                    players[int(pnum)].actions.append(a)
+                    i += 1
+                if i >= round:
+                    break
+            if not deck: 
+                s.wfile.write("<html><head><title>Hanabi</title></head>\n")
+                s.wfile.write('<body><h1>Invalid Game Log</h1>\n')
+                s.wfile.write("</body></html>")
+                return
+            player = players[1]
+            random.seed(deck)
+            gid = s.getgid()
+            t = (ai,deck)
+            log = file("log/game%s.log"%gid, "w")
+            print >>log, "Original:", oldgid
+            print >>log, "Treatment:", t
+            game = hanabi.Game(players, log=log, format=1)
+            game.treatment = t
+            game.ping = time.time()
+            game.started = True
+            for i in xrange(round):
+                game.single_turn()
+            game.players[0] = game.players[0].realplayer
+            game.current_player = 1
+            doaction = False
+            turn = round+1
+            gameslock.acquire()
+            games[gid] = (game,players[1],turn)
+            gameslock.release()
+            path = "/%d/%s/%s"%(turn, action, arg)
+        
+        elif path.startswith("/showsurvey/"):
+            gid = path[12:28]
+            fname = "log/survey%s.log"%gid
+            
+            if "/" in gid or "\\" in gid or not os.path.exists(fname):
+                s.wfile.write("<html><head><title>Hanabi</title></head>\n")
+                s.wfile.write('<body><h1>No survey answers recorded for this game ID</h1>\n')
+                s.wfile.write("</body></html>")
+                return
+            f = file(fname)
+            answers = {}
+            for l in f:
+                if l.strip():
+                    q,a = l.split(None, 1)
+                    answers[q.strip()] = a.strip()
+            f.close()
+            s.wfile.write("<html><head><title>Hanabi</title></head>\n")
+            s.wfile.write('<body><h1>Survey responses for %s</h1>\n'%gid)
+            s.presurvey_questions(answers)
+            if path.endswith("full"):
+                s.postsurvey_questions(answers)
+            
+            s.wfile.write("</body></html>")
+            return
+        elif path.startswith("/selectreplay/"):
+            filters = path[14:].split("/")
+            filters = dict(zip(filters[::2], filters[1::2]))
+            s.wfile.write("<html><head><title>Hanabi</title></head>\n")
+            s.wfile.write('<body>')
+            s.wfile.write('<h1>Replay selection</h1>')
+            s.wfile.write('<h2>Filters:</h2>')
+            def format_filters(f):
+                result = ""
+                for k in f:
+                    result += "%s/%s/"%(k,f[k])
+                return result
+                
+            def update_filters(f, k, v):
+                result = dict(f)
+                if v:
+                    result[k] = v
+                elif k in result:
+                    del result[k]
+                return result
+            
+            s.wfile.write('<p>AI: ')
+            
+            for i,(display,value) in enumerate([("Outer State AI", "outer"), ("Intentional AI", "intentional"), ("Full AI", "full")]):
+                s.wfile.write(' <a href="/selectreplay/%s">%s</a> - '%(format_filters(update_filters(filters, "ai", value)), display))
+            s.wfile.write(' <a href="/selectreplay/%s">any</a></p>'%(format_filters(update_filters(filters, "ai", ""))))
+            
+            s.wfile.write('<p>Score: ')
+            
+            for i,(display,value) in enumerate([("0-4", "0"), ("5-9", "1"), ("10-14", "2"), ("15-19", "3"), ("20-24", "4"), ("25", "5")]):
+                s.wfile.write(' <a href="/selectreplay/%s">%s</a> - '%(format_filters(update_filters(filters, "score", value)), display))
+            s.wfile.write(' <a href="/selectreplay/%s">any</a></p>'%(format_filters(update_filters(filters, "score", ""))))
+            
+            s.wfile.write('<p>Deck: ')
+            
+            for i,(display,value) in enumerate([("1", "1"), ("2", "2"), ("3", "3"), ("4", "4"), ("5", "5"), ("other", "other")]):
+                s.wfile.write(' <a href="/selectreplay/%s">%s</a> - '%(format_filters(update_filters(filters, "deck", value)), display))
+            s.wfile.write(' <a href="/selectreplay/%s">any</a></p>'%(format_filters(update_filters(filters, "deck", ""))))
+            
+            s.wfile.write('Select a replay to view:<br/><ul>')
+            replays = []
+            
+            def match(f, ai, deck, score):
+                if "ai" in f and ai != f["ai"]:
+                    return False
+                if "score" in f and (score is None or score/5 != int(f["score"])):
+                    return False
+                if "deck" in f and ((str(deck) != f["deck"] and f["deck"] != "other") or (f["deck"] == "other" and deck <= 5)):
+                    return False
+                
+                return True
+            
+            for f in os.listdir("log/"):
+                if f.startswith("game"):
+                    gid = f[4:20]
+                    fname = os.path.join("log", f)
+                    (ai,deck,score) = get_replay_info(fname)
+                    if ai and deck and match(filters, ai, deck, score):
+                        entry = '<li><a href="/replay/%s/1">Game %s (%s AI, %s, deck %d)</a></li>\n'%(gid, gid, ai, format_score(score), deck)
+                        replays.append(((score if score else -1), entry))
+            replays.sort(key=lambda(s,e): -s)
+            for (score,entry) in replays:
+                s.wfile.write(entry)
+            return
+        elif path.startswith("/takeover/"):
+            items = filter(None, path.split("/"))
+            
+            if len(items) < 5:
+                s.wfile.write("<html><head><title>Hanabi</title></head>\n")
+                s.wfile.write('<body><h1>Invalid Game ID</h1>\n')
+                s.wfile.write("</body></html>")
+                return
+            gid,round,action,arg = items[1:]
+            fname = "log/game%s.log"%gid
+            try:
+                round = int(round)
+            except Exception:
+                import traceback
+                traceback.print_exc()
+                round = None
+            if "/" in gid or "\\" in gid or round is None or not os.path.exists(fname):
+                s.wfile.write("<html><head><title>Hanabi</title></head>\n")
+                s.wfile.write('<body><h1>Invalid Game ID</h1>\n')
+                s.wfile.write("</body></html>")
+                return
+            (ai,deck,score) = get_replay_info(fname)
+            s.wfile.write("<html><head><title>Hanabi</title></head>\n")
+            s.wfile.write('<body><h1>Take over game</h1>\n')
+            s.wfile.write('<p>If you continue, you will take over playing the game you were viewing from turn %d onward</p>'%round)
+            s.wfile.write('<p>You may choose to use the same AI as the player that was playing the game by clicking <a href="/starttakeover/%s/%d/%s/%s/%s">here</a></p>\n'%(gid,round+1,ai,action,arg))
+            s.wfile.write('<p>You may also choose any AI to play with:</p><ul>')
+            for a in ais:
+                s.wfile.write('<li><a href="/starttakeover/%s/%d/%s/%s/%s">%s AI</a></li>'%(gid,round+1,a,action,arg,a.capitalize()))
+                
+            s.wfile.write("</ul></p></body></html>")
+            return
         
         if gid is None or game is None or path.startswith("/restart/"):
             if not debug:
@@ -737,20 +952,8 @@ class MyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
             s.wfile.write('<li><a href="/new/intentional">Intentional Player</a></li>\n')
             s.wfile.write('<li><a href="/new/full">Fully Intentional Player</a></li>\n')
             s.wfile.write('</ul><br/>')
-            s.wfile.write('Or select a replay to view:<br/><ul>')
-            games = []
-            
-            for f in os.listdir("log/"):
-                if f.startswith("game"):
-                    gid = f[4:20]
-                    fname = os.path.join("log", f)
-                    (ai,deck,score) = get_replay_info(fname)
-                    if ai and deck:
-                        entry = '<li><a href="/replay/%s/1">Game %s (%s AI, %s, deck %d)</a></li>\n'%(gid, gid, ai, format_score(score), deck)
-                        games.append(((score if score else -1), entry))
-            games.sort(key=lambda(s,e): -s)
-            for (score,entry) in games:
-                s.wfile.write(entry)
+            s.wfile.write('<p>Or select a <a href="/selectreplay/">replay file to view</a></p>')
+            s.wfile.write('</body></html>')
             return
             
         if path.startswith("/explain") and debug:
@@ -839,65 +1042,112 @@ class MyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
         s.wfile.write('<center><h1>Finally, please answer some question about previous board game experience</h1>')
         s.wfile.write('<table width="600px">\n<tr><td>')
         s.wfile.write('<form action="/submitpost2" method="POST">')
-        s.add_choice("age", "What is your age?", [("20s", "18-29 years"), ("30s", "30-39 years"), ("40s", "40-49 years"), ("50s", "50-64 years"), ("na", "Prefer not to answer")])
-        s.add_choice("bgg", "How familiar are you with the board and card games in general?", 
-                            [("new", "I never play board or card games"),
-                             ("dabbling", "I rarely play board or card games"),
-                             ("intermediate", "I sometimes play board or card games"),
-                             ("expert", "I often play board or card games")])
-        s.add_choice("gamer", "Do you consider yourself to be a (board) gamer?", 
-                            [("yes", "Yes"),
-                             ("no", "No")])
-        s.add_choice("exp", "How familiar are you with the card game Hanabi?", 
-                            [("new", "I have never played before participating in this experiment"),
-                             ("dabbling", "I have played a few (1-10) times"),
-                             ("intermediate", "I have played multiple (10-50) times"),
-                             ("expert", "I have played many (&gt; 50) times")])
-        s.add_choice("recent", "When was the last time that you played Hanabi before this experiment?", 
-                            [("never", "I have never played before or can't remember when I played the last time"),
-                             ("long", "The last time I played has been a long time (over a year) ago"),
-                             ("medium", "The last time I played has been some time (between 3 months and a year) ago"),
-                             ("recent", "The last time I played was recent (up to 3 months ago)")])
-        s.add_choice("score", "How often do you typically reach the top score of 25 in Hanabi?", 
-                              [("never", "I never reach the top score, or I have never played Hanabi"),
-                               ("few", "I almost never reach the top score (about one in 50 or more games)"),
-                               ("sometimes", "I sometimes reach the top score (about one in 6-20 games)"),
-                               ("often", "I often reach the top score (about one in 5 or fewer games)")])
-        s.add_choice("publish", "For this study we have recorded your answers to this survey, as well as a log of actions that you performed in the game. We have <b>not</b> recorded your IP address or any other information that could be linked back to you. Do you agree that we make your answers to the survey and the game log publicly available for future research?", 
-                              [("yes", "Yes"),
-                               ("no", "No")], 0)
+        s.presurvey_questions()
         s.wfile.write("<p>")
         s.wfile.write('<input name="gid" type="hidden" value="%s"/>\n'%gid)
         s.wfile.write('<input type="submit" value="Finish"/>\n')
         s.wfile.write('</form></td></tr></table></center>')
         
+    def presurvey_questions(s, answers={}):
+        
+        responses = [("20s", "18-29 years"), ("30s", "30-39 years"), ("40s", "40-49 years"), ("50s", "50-64 years"), ("na", "Prefer not to answer")]
+        default = -1
+        if "age" in answers:
+            default = map(lambda (a,b): a, responses).index(answers["age"])
+        s.add_choice("age", "What is your age?", responses, default)
+        
+        responses = [("new", "I never play board or card games"),
+                             ("dabbling", "I rarely play board or card games"),
+                             ("intermediate", "I sometimes play board or card games"),
+                             ("expert", "I often play board or card games")]
+        default = -1
+        if "bgg" in answers:
+            default = map(lambda (a,b): a, responses).index(answers["bgg"])
+        s.add_choice("bgg", "How familiar are you with the board and card games in general?", responses, default)
+                            
+        responses = [("yes", "Yes"), ("no", "No")]
+        default = -1
+        if "gamer" in answers:
+            default = map(lambda (a,b): a, responses).index(answers["gamer"])
+        s.add_choice("gamer", "Do you consider yourself to be a (board) gamer?", responses, default)
+        
+        responses = [("new", "I have never played before participating in this experiment"),
+                             ("dabbling", "I have played a few (1-10) times"),
+                             ("intermediate", "I have played multiple (10-50) times"),
+                             ("expert", "I have played many (&gt; 50) times")]
+        default = -1
+        if "exp" in answers:
+            default = map(lambda (a,b): a, responses).index(answers["exp"])
+        s.add_choice("exp", "How familiar are you with the card game Hanabi?", responses, default)
+        
+        responses = [("never", "I have never played before or can't remember when I played the last time"),
+                             ("long", "The last time I played has been a long time (over a year) ago"),
+                             ("medium", "The last time I played has been some time (between 3 months and a year) ago"),
+                             ("recent", "The last time I played was recent (up to 3 months ago)")]
+        default = -1
+        if "recent" in answers:
+            default = map(lambda (a,b): a, responses).index(answers["recent"])
+        s.add_choice("recent", "When was the last time that you played Hanabi before this experiment?", responses, default)
+
+        responses = [("never", "I never reach the top score, or I have never played Hanabi"),
+                               ("few", "I almost never reach the top score (about one in 50 or more games)"),
+                               ("sometimes", "I sometimes reach the top score (about one in 6-20 games)"),
+                               ("often", "I often reach the top score (about one in 5 or fewer games)")]
+        default = -1
+        if "score" in answers:
+            default = map(lambda (a,b): a, responses).index(answers["score"])
+        s.add_choice("score", "How often do you typically reach the top score of 25 in Hanabi?", responses, default,)
+                               
+        responses = [("yes", "Yes"), ("no", "No")]
+        default = 0
+        if "gamer" in answers:
+            default = map(lambda (a,b): a, responses).index(answers["publish"])                    
+        s.add_choice("publish", "For this study we have recorded your answers to this survey, as well as a log of actions that you performed in the game. We have <b>not</b> recorded your IP address or any other information that could be linked back to you. Do you agree that we make your answers to the survey and the game log publicly available for future research?", 
+                              responses, default)
+        
+        
+        
     def postsurvey(s, gid, warn=False):
         s.wfile.write('<center><h1>Please answer some questions about your experience with the AI</h1>')
         s.wfile.write('<table width="600px">\n<tr><td>')
         s.wfile.write('<form action="/submitpost" method="POST">')
-        
-        s.add_choice("intention", "How intentional/goal-directed did you think this AI was playing?", 
-                            [("1", "Never performed goal-directed actions"),
-                             ("2", "Rarely performed goal-directed actions"),
-                             ("3", "Sometimes performed goal-directed actions"),
-                             ("4", "Often performed goal-directed actions"),
-                             ("5", "Always performed goal-directed actions")])
-        s.add_choice("skill", "How would you rate the play skill of this AI?", 
-                              [("vbad", "The AI played very badly"),
-                               ("bad", "The AI played badly"),
-                               ("ok", "The AI played ok"),
-                               ("good", "The AI played well"),
-                               ("vgood", "The AI played very well")])
-        s.add_choice("like", "How much did you enjoy playing with this AI?", 
-                              [("vhate", "I really disliked playing with this AI"),
-                               ("hate", "I somewhat disliked playing with this AI"),
-                               ("neutral", "I neither liked nor disliked playing with this AI"),
-                               ("like", "I somewhat liked playing with this AI"),
-                               ("vlike", "I really liked playing with this AI")])
+        s.postsurvey_questions()
         s.wfile.write("<p>")
         s.wfile.write('<input name="gid" type="hidden" value="%s"/>\n'%gid)
         s.wfile.write('<input type="submit" value="Continue"/>\n')
         s.wfile.write('</form></td></tr></table></center>')
+    
+    def postsurvey_questions(s, answers={}):
+        responses = [("1", "Never performed goal-directed actions"),
+                             ("2", "Rarely performed goal-directed actions"),
+                             ("3", "Sometimes performed goal-directed actions"),
+                             ("4", "Often performed goal-directed actions"),
+                             ("5", "Always performed goal-directed actions")]
+        default = -1
+        if "intention" in answers:
+            default = map(lambda (a,b): a, responses).index(answers["intention"])
+        s.add_choice("intention", "How intentional/goal-directed did you think this AI was playing?", responses, default)
+        
+        responses = [("vbad", "The AI played very badly"),
+                               ("bad", "The AI played badly"),
+                               ("ok", "The AI played ok"),
+                               ("good", "The AI played well"),
+                               ("vgood", "The AI played very well")]
+        default = -1
+        if "skill" in answers:
+            default = map(lambda (a,b): a, responses).index(answers["skill"])
+        s.add_choice("skill", "How would you rate the play skill of this AI?", responses, default)
+
+        responses = [("vhate", "I really disliked playing with this AI"),
+                               ("hate", "I somewhat disliked playing with this AI"),
+                               ("neutral", "I neither liked nor disliked playing with this AI"),
+                               ("like", "I somewhat liked playing with this AI"),
+                               ("vlike", "I really liked playing with this AI")]
+        default = -1
+        if "like" in answers:
+            default = map(lambda (a,b): a, responses).index(answers["like"])
+        s.add_choice("like", "How much did you enjoy playing with this AI?", responses, default)
+        
         
     def parse_POST(self):
         ctype, pdict = parse_header(self.headers['content-type'])
