@@ -488,7 +488,7 @@ def format_score(sc):
     return "%d points"%sc
     
                 
-
+# AIClasses
 ais = {"random": hanabi.Player, "inner": hanabi.InnerStatePlayer, "outer": hanabi.OuterStatePlayer, "self": hanabi.SelfRecognitionPlayer, "intentional": hanabi.IntentionalPlayer, "full": hanabi.SelfIntentionalPlayer}
 
 class MyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
@@ -943,6 +943,8 @@ class MyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
             if gid is not None and gid in games:
                 del games[gid]
             gameslock.release()
+            # AIList
+            # /new/<foo> will look up <foo> in the ais dictionary, so make sure the names match
             s.wfile.write("<html><head><title>Hanabi</title></head>\n")
             s.wfile.write('<body><h1>Welcome to Hanabi</h1> <p>To start, choose an AI:</p>\n')
             s.wfile.write('<ul><li><a href="/new/random">Random</a></li>\n')
@@ -1282,13 +1284,15 @@ class ThreadingHTTPServer(SocketServer.ThreadingMixIn, BaseHTTPServer.HTTPServer
  
 if __name__ == '__main__':
     server_class = ThreadingHTTPServer
+    if not os.path.exists("log/"):
+        os.makedirs("log")
     httpd = server_class((HOST_NAME, PORT_NUMBER), MyHandler)
     errlog.write(time.asctime() + " Server Starts - %s:%s\n" % (HOST_NAME, PORT_NUMBER))
     errlog.flush()
     try:
        httpd.serve_forever()
     except KeyboardInterrupt:
-     pass
+       pass
     httpd.server_close()
     errlog.write(time.asctime() +  " Server Stops - %s:%s\n" % (HOST_NAME, PORT_NUMBER))
     errlog.flush()

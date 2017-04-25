@@ -137,6 +137,13 @@ def potentially_discardable(possible, board):
         if board[col][1] >= nr:
             return True
     return False
+    
+def update_knowledge(knowledge, used):
+    result = copy.deepcopy(knowledge)
+    for r in result:
+        for (c,nr) in used:
+            r[c][nr-1] = max(r[c][nr-1] - used[c,nr], 0)
+    return result
         
 class InnerStatePlayer(Player):
     def __init__(self, name, pnr):
@@ -864,12 +871,7 @@ class SelfIntentionalPlayer(Player):
             self.last_trash = game.trash[:]
             self.played = game.played[:]
             
-def update_knowledge(knowledge, used):
-    result = copy.deepcopy(knowledge)
-    for r in result:
-        for (c,nr) in used:
-            r[c][nr-1] = max(r[c][nr-1] - used[c,nr], 0)
-    return result
+
     
 def do_sample(knowledge):
     if not knowledge:
