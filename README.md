@@ -57,6 +57,17 @@ The following functions can be useful when developing a new AI:
 
 Our system can also be used to view replays of games, as well as taking over game play at any point during such a replay, even with a different AI. As an example for the use of this feature, we have obtained a data set, consisting of over 2000 game logs from 240 players, which is available in a [separate repository](https://github.com/yawgmoth/HanabiData). Simply place the game logs in the `log/` directory and they can be opened from the main menu of the UI.
 
+## Bibliography
+
+If you use the AIs contained in this project for research purposes, these are the appropriate references:
+
+For the Inner State, Outer State and Self Recognition player:
+
+Osawa, Hirotaka. "Solving Hanabi: Estimating Hands by Opponent's Actions in Cooperative Game with Incomplete Information." Workshops at the Twenty-Ninth AAAI Conference on Artificial Intelligence. 2015.
+
+For the Intentional and Self Intentional player:
+
+Eger, Markus, Martens, Chris and Alfaro Cordoba, Marcela. "An Intentional AI for Hanabi". To appear. More information and preprint [here](http://yawgmoth.github.io/research/hanabiai)
 
 ## Disclaimer
 
