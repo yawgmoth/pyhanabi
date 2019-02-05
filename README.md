@@ -67,7 +67,7 @@ Osawa, Hirotaka. "Solving Hanabi: Estimating Hands by Opponent's Actions in Coop
 
 For the Intentional and Self Intentional player:
 
-Eger, Markus, Martens, Chris and Alfaro Cordoba, Marcela. "An Intentional AI for Hanabi". To appear. More information and preprint [here](http://yawgmoth.github.io/research/hanabiai)
+Eger, Markus, Martens, Chris and Alfaro Cordoba, Marcela. "An Intentional AI for Hanabi". 2017 IEEE Conference on Computational Intelligence and Games (CIG). IEEE, 2017. [pdf](http://www.cig2017.com/wp-content/uploads/2017/08/paper_24.pdf)
 
 ## Disclaimer
 
