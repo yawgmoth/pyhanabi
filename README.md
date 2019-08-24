@@ -69,6 +69,10 @@ For the Intentional and Self Intentional player:
 
 Eger, Markus, Martens, Chris and Alfaro Cordoba, Marcela. "An Intentional AI for Hanabi". 2017 IEEE Conference on Computational Intelligence and Games (CIG). IEEE, 2017. [pdf](http://www.cig2017.com/wp-content/uploads/2017/08/paper_24.pdf)
 
+For the timing player:
+
+Eger, Markus and Gruss, Daniel. "Wait a Second: Playing Hanabi without Giving Hints". 14th International Conference on Foundations of Digital Games (FDG), 2019. [pdf](https://gruss.cc/files/waitasecond.pdf)
+
 ## Disclaimer
 
 Note that Hanabi was designed by Antoine Bauza and is published by Asmodée Éditions, who hold the rights to the game. Our implementation is provided for research purposes only!
