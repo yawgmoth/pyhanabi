@@ -656,11 +656,13 @@ class MyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
                 ai = ais[type](type, 0)
             turn = 1
             player = HTTPPlayer("You", 1)
+            nr = random.randint(6,10000)
+            t = (type,nr)
             gid = s.getgid()
             log = file("log/game%s.log"%gid, "w")
-            print >>log, "Treatment:", type
+            print >>log, "Treatment:", t
             game = hanabi.Game([ai,player], log=log, format=1)
-            game.treatment = type
+            game.treatment = t
             game.ping = time.time()
             game.started = False
             todelete = []
