@@ -40,4 +40,6 @@ python dev_tools/log_analyzer.py end_reasons        "$D/txt";  echo
 python dev_tools/log_analyzer.py lost_lives         "$D/txt";  echo
 python dev_tools/log_analyzer.py critical_discards  "$D/txt";  echo
 python dev_tools/log_analyzer.py hint_types         "$D/json"; echo
-python dev_tools/log_analyzer.py third_player_hints "$D/txt"
+python dev_tools/log_analyzer.py third_player_hints "$D/txt"; echo
+python dev_tools/log_analyzer.py critical_misplays  "$D/txt";  echo
+python dev_tools/log_analyzer.py critical_hints     "$D/txt"

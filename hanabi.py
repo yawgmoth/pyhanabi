@@ -163,7 +163,7 @@ def report_metrics(pts: list[int], players: list[Player], n: int,
         ax.set_xlabel("Mean Hint Interpretation Accuracy per game")
         ax.set_ylabel("Number of games")
     plt.tight_layout()
-    plt.savefig(f"{prefix}hint__interpretation_accuracy_{suffix}.png", dpi=120)
+    plt.savefig(f"{prefix}hint_interpretation_accuracy_{suffix}.png", dpi=120)
     plt.close("all")
     saved.append(f"{prefix}hint_interpretation_accuracy_{suffix}.png")
 
@@ -276,7 +276,6 @@ def main(args):
             has_unplayable: list[list[int]] = []
             hint_frequencies: list[list[int]] = []
             hint_possible: list[list[int]] = []
-            hint_interpretation_accuracy: list[list[int]] = []
             hints_received: list[list[int]] = []
             hints_interpreted_correctly: list[list[int]] = []
             print("trial", i + 1)
@@ -307,9 +306,8 @@ def main(args):
                     has_unplayable.append(metrics["has_unplayable"])
                     hint_frequencies.append(metrics["hint_frequency"])
                     hint_possible.append(metrics["hint_possible"])
-                    hint_interpretation_accuracy.append(metrics["hint_interpretation_accuracy"])
                     hints_received.append(metrics["hints_received"])
-                    hints_interpreted_correctly.append(metrics["hints_interpreted_correctly"])
+                    hints_interpreted_correctly.append(metrics["hint_interpreted_correctly"])
                 # TODO: change back or add flag
                 # avg_times.append(times[-1] * 1.0 / g.turn)
                 print(
@@ -360,6 +358,13 @@ def main(args):
                         avg_hint_frequency = sum(
                             hint_frequencies[j][i] for j in range(int(args[1]))
                         ) / sum(hint_possible[j][i] for j in range(int(args[1])))
+
+                    if sum(hints_received[j][i] for j in range(int(args[1]))) == 0:
+                        avg_hint_interpretation = 0
+                    else:
+                        avg_hint_interpretation = sum(
+                            hints_interpreted_correctly[j][i] for j in range(int(args[1]))
+                        ) / sum(hints_received[j][i] for j in range(int(args[1])))
 
                     if avg_ipp is None:
                         print(f"IPP for {player}: No valid data")

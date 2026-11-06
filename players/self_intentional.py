@@ -763,6 +763,40 @@ class SelfIntentionalPlayer(Player):
                 if result:
                     self.intent = "Save"
 
+        if self.version == 20:
+            # V20 = V0 + lives-aware risky play (V17): isolates the effect of
+            # risky play, without V14's forced-hint handling (V5) or dynamic
+            # hint weights (V8).
+
+            # Interpret recieved hint
+            if self.got_hint:
+                result = self.received_hint(nr, knowledge, board, hints, result, action)
+
+            # play or discard
+            if not result:
+                result = self.play_or_discard(nr, knowledge, board, hints, possible, result)
+
+            # give intentional hint
+            if not result:
+                result, redundant_hints = self.give_intentional_hint(nr, hands, knowledge, trash, board, hints, num_players, result, ignore_dead)
+
+            # At max tokens I cannot discard: redundant hint, else random hint
+            if hints == MAX_HINT_TOKENS and not result:
+                if redundant_hints:
+                    result = self.give_redundant_hint(redundant_hints)
+                else:
+                    result = self.give_random_hint(valid_actions)
+
+            # V0's discard candidate
+            scores = self.discard_card(nr, knowledge, trash, board)
+
+            # Risky play instead of the fallback discard (V17)
+            if not result:
+                result = self.risky_play_v17(
+                    nr, knowledge, board, hints, lives, deck_size, num_players,
+                    scores[0][0],
+                )
+
         if result:
             assert result in valid_actions
             return result

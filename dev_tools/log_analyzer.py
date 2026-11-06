@@ -537,7 +537,16 @@ def get_estimate_critical_and_overall_score_loss_from_file(path: Path) -> int:
 
     # get all the critical cards discarded
     critical_cards = get_critical_card_list_from_file(path)
+    score_loss = estimate_blocked_score_loss(critical_cards, board)
 
+    return score_loss, overall_score_loss
+
+
+def estimate_blocked_score_loss(critical_cards, board: dict) -> int:
+    """
+    Estimate the score lost because the given critical cards left the game:
+    for each colour, every rank from the lowest lost critical card up to 5 can no longer be played.
+    """
     lowest_blocked_rank = {}
     for col, rank in critical_cards:
         if rank > board[col]:
@@ -547,9 +556,7 @@ def get_estimate_critical_and_overall_score_loss_from_file(path: Path) -> int:
             ):
                 lowest_blocked_rank[col] = rank
 
-    score_loss = sum(6 - rank for rank in lowest_blocked_rank.values())
-
-    return score_loss, overall_score_loss
+    return sum(6 - rank for rank in lowest_blocked_rank.values())
 
 
 def report_potential_score_loss(path: Path) -> None:
@@ -715,6 +722,281 @@ def report_hint_intentions(path: Path) -> None:
       f"{hint_discards / game_count}")
     print("Average classified hints per game:",
       f"{total_hints / game_count}")
+
+
+# ---------------------------------------------------------------------------
+# Shared .txt log parsing (used by critical_misplays and critical_hints)
+# ---------------------------------------------------------------------------
+CARD_REGEX = re.compile(r"\b(white|red|blue|green|yellow) ([1-5])\b")
+COLORS = ["green", "yellow", "white", "blue", "red"]
+INITIAL_LIVES = 3
+MAX_HINT_TOKENS = 8
+
+
+def parse_card(text: str) -> Tuple[str, int]:
+    """Return the first card (colour, rank) mentioned in text."""
+    match = CARD_REGEX.search(text)
+    assert match, f"Cannot parse a card from: {text}"
+    return match.group(1), int(match.group(2))
+
+
+def parse_game_states(path: Path) -> Tuple[int, List[dict]]:
+    """
+    Parse a .txt game log into the sequence of game states.
+    - states[0] is the state before the first move
+    - states[k] is the state right after move k
+    Each state is a dict with keys:
+    - "move": the move description, e.g. "Player 1 plays yellow 1 — and it failed" ("" for states[0])
+    - "board": {colour: height}
+    - "trash": list of (colour, rank)
+    - "lives", "hints": lives and hint tokens left
+    - "hands": {player number: list of (colour, rank)}
+    Returns (number of players, states).
+    """
+    assert path.is_file(), f"The path provided is not a file: {path}"
+    with open(path, "r") as f:
+        lines = [line.rstrip("\n") for line in f]
+
+    n_players = int(lines[0].split()[0])
+    initial = {"move": "", "board": {col: 0 for col in COLORS}, "trash": [],
+               "lives": INITIAL_LIVES, "hints": MAX_HINT_TOKENS, "hands": {}}
+    states = [initial]
+    current = None
+    current_player = None
+    in_starting_hands = False
+
+    for line in lines:
+        if line.startswith("Starting hands:"):
+            in_starting_hands = True
+        elif in_starting_hands and line.startswith("Player "):
+            player, cards = line.split(":", 1)
+            initial["hands"][int(player.split()[1])] = [parse_card(card) for card in cards.split(",")]
+        elif line.startswith("Move "):
+            in_starting_hands = False
+            current = {"move": line.split(":", 1)[1].strip(), "hands": {}}
+            states.append(current)
+        elif current is None:
+            continue
+        elif line.startswith("Board:"):
+            current["board"] = {col: int(height) for col, height in
+                                re.findall(r"(green|yellow|white|blue|red) (\d+)", line)}
+        elif line.startswith("Trash:"):
+            current["trash"] = [(col, int(rank)) for col, rank in CARD_REGEX.findall(line)]
+        elif line.startswith("Lives:"):
+            lives, hints = re.fullmatch(r"Lives: (\d+) \| Hints: (\d+)", line.strip()).groups()
+            current["lives"], current["hints"] = int(lives), int(hints)
+        elif re.fullmatch(r"  Player \d+:", line):
+            current_player = int(line.split()[1].rstrip(":"))
+            current["hands"][current_player] = []
+        elif re.match(r"    \[\d+\] ", line):
+            current["hands"][current_player].append(parse_card(line.split("->")[0]))
+
+    return n_players, states
+
+
+def is_critical_card(card: Tuple[str, int], board: dict, trash: list) -> bool:
+    """
+    Whether the card is critical in the given state (taken before the card leaves the game):
+    it is not played yet and every other copy of it is already in the trash.
+    """
+    col, rank = card
+    return rank > board[col] and trash.count(card) == CARD_COUNTS[rank] - 1
+
+
+def get_txt_log_files(path: Path) -> List[Path]:
+    """Return [path] for a log file, or every .txt log under a directory of logs."""
+    if path.is_file():
+        return [path]
+    if path.is_dir():
+        return sorted(path.rglob("*.txt"))
+    raise ValueError(f"Path does not exist: {path}")
+
+
+# ---------------------------------------------------------------------------
+# Command: critical_misplays
+# ---------------------------------------------------------------------------
+def get_critical_misplay_info_from_file(path: Path) -> dict:
+    """
+    Get misplay information from a given .txt log file. Returns a dict with:
+    - "misplays": number of misplays (lives lost)
+    - "critical_misplays": list of (colour, rank) of the critical cards misplayed
+    - "out_of_lives": whether the game ended because all lives were lost
+    - "overall_loss": 25 - final score
+    - "discard_loss", "misplay_loss", "combined_loss": estimated score loss from critical discards,
+      from critical misplays, and from both (counted once when they block the same colour)
+    """
+    _, states = parse_game_states(path)
+    misplays = 0
+    critical_misplays = []
+    for prev, state in zip(states, states[1:]):
+        if "and it failed" not in state["move"]:
+            continue
+        misplays += 1
+        card = parse_card(state["move"])
+        if is_critical_card(card, prev["board"], prev["trash"]):
+            critical_misplays.append(card)
+
+    final_board = states[-1]["board"]
+    critical_discards = [tuple(card) for card in get_critical_card_list_from_file(path)]
+    return {
+        "misplays": misplays,
+        "critical_misplays": critical_misplays,
+        "out_of_lives": states[-1]["lives"] == 0,
+        "overall_loss": 25 - sum(final_board.values()),
+        "discard_loss": estimate_blocked_score_loss(critical_discards, final_board),
+        "misplay_loss": estimate_blocked_score_loss(critical_misplays, final_board),
+        "combined_loss": estimate_blocked_score_loss(critical_discards + critical_misplays, final_board),
+    }
+
+
+def report_critical_misplays(path: Path) -> None:
+    """
+    Report stats on critical misplays and the score lost from them, next to the score lost from critical discards.
+    If path points to a single log file, report the stats of the single game.
+    If path points to a directory of log files, report aggregate stats over all games.
+    """
+    files = get_txt_log_files(path)
+    if not files:
+        print("No game logs found.")
+        return
+    print(f"Reporting critical misplays for: {path}")
+
+    game_count = len(files)
+    misplays = 0
+    critical_by_rank = {rank: 0 for rank in CARD_COUNTS}
+    games_with_critical_misplay = 0
+    out_of_lives_games = 0
+    out_of_lives_with_critical_misplay = 0
+    losses = {"overall_loss": 0, "discard_loss": 0, "misplay_loss": 0, "combined_loss": 0}
+
+    for file in files:
+        info = get_critical_misplay_info_from_file(file)
+        misplays += info["misplays"]
+        for _, rank in info["critical_misplays"]:
+            critical_by_rank[rank] += 1
+        if info["critical_misplays"]:
+            games_with_critical_misplay += 1
+        if info["out_of_lives"]:
+            out_of_lives_games += 1
+            if info["critical_misplays"]:
+                out_of_lives_with_critical_misplay += 1
+        for key in losses:
+            losses[key] += info[key]
+
+    critical_misplays = sum(critical_by_rank.values())
+    print("Games analyzed:", game_count)
+    print("Total misplays (lives lost):", misplays)
+    print("Critical misplays:", critical_misplays)
+    if misplays > 0:
+        print("Critical misplays ratio:", critical_misplays / misplays)
+    print("Critical misplays by rank:", critical_by_rank)
+    print("Games with at least one critical misplay:", games_with_critical_misplay)
+    print("Games that ran out of lives:", out_of_lives_games,
+          f"(with a critical misplay: {out_of_lives_with_critical_misplay})")
+    print("Average misplays per game:", misplays / game_count)
+    print("Average critical misplays per game:", critical_misplays / game_count)
+    print("Average total score loss per game:", losses["overall_loss"] / game_count)
+    print("Average estimated critical discard score loss per game:", losses["discard_loss"] / game_count)
+    print("Average estimated critical misplay score loss per game:", losses["misplay_loss"] / game_count)
+    print("Average estimated critical discard + misplay score loss per game:", losses["combined_loss"] / game_count)
+
+
+# ---------------------------------------------------------------------------
+# Command: critical_hints
+# ---------------------------------------------------------------------------
+def get_critical_hint_info_from_file(path: Path) -> List[dict]:
+    """
+    Get one dict per hint given in a .txt log file, with:
+    - "tokens": the number of hint tokens available before the hint was given
+    - "critical": whether the hint touched at least one critical card in the receiver's hand
+    - "discards", "critical_discards", "misplays": what the other players did in the moves right
+      after the hint, before the hinter's next turn (n_players - 1 moves)
+    """
+    n_players, states = parse_game_states(path)
+    hints = []
+    for k in range(1, len(states)):
+        match = re.fullmatch(r"Player \d+ hints Player (\d+): (.+)", states[k]["move"])
+        if not match:
+            continue
+        receiver, hint = int(match.group(1)), match.group(2)
+        prev = states[k - 1]
+        number_hint = re.fullmatch(r"([1-5])s", hint)
+        if number_hint:
+            touched = [card for card in prev["hands"][receiver] if card[1] == int(number_hint.group(1))]
+        else:
+            touched = [card for card in prev["hands"][receiver] if card[0] == hint.split()[0]]
+
+        info = {
+            "tokens": prev["hints"],
+            "critical": any(is_critical_card(card, prev["board"], prev["trash"]) for card in touched),
+            "discards": 0,
+            "critical_discards": 0,
+            "misplays": 0,
+        }
+        for j in range(k + 1, min(k + n_players, len(states))):
+            move, before = states[j]["move"], states[j - 1]
+            if " discards " in move:
+                info["discards"] += 1
+                if is_critical_card(parse_card(move), before["board"], before["trash"]):
+                    info["critical_discards"] += 1
+            elif "and it failed" in move:
+                info["misplays"] += 1
+        hints.append(info)
+    return hints
+
+
+def report_critical_hints(path: Path) -> None:
+    """
+    Report how many hints and critical-card hints were given at each number of available hint tokens,
+    and what the other players did right after them (before the hinter's next turn).
+    If path points to a single log file, report the stats of the single game.
+    If path points to a directory of log files, report aggregate stats over all games.
+    """
+    files = get_txt_log_files(path)
+    if not files:
+        print("No game logs found.")
+        return
+    print(f"Reporting critical-card hints by hint tokens for: {path}")
+
+    keys = ["count", "discards", "critical_discards", "misplays"]
+    # stats[tokens][critical] -> totals over the hints given with that many tokens
+    stats = {tokens: {critical: dict.fromkeys(keys, 0) for critical in (True, False)}
+             for tokens in range(1, MAX_HINT_TOKENS + 1)}
+    for file in files:
+        for hint in get_critical_hint_info_from_file(file):
+            bucket = stats[hint["tokens"]][hint["critical"]]
+            bucket["count"] += 1
+            for key in keys[1:]:
+                bucket[key] += hint[key]
+
+    total_hints = sum(s[c]["count"] for s in stats.values() for c in (True, False))
+    total_critical = sum(s[True]["count"] for s in stats.values())
+    print("Games analyzed:", len(files))
+    print("Total hints:", total_hints)
+    print("Critical-card hints:", total_critical)
+    if total_hints == 0:
+        return
+
+    print("\nHints by tokens available before the hint:")
+    print(f"{'tokens':>6} | {'hints':>7} {'% of hints':>10} | {'critical':>8} {'% of crit':>9} | {'% critical':>10}")
+    for tokens, s in stats.items():
+        n_all = s[True]["count"] + s[False]["count"]
+        n_crit = s[True]["count"]
+        print(f"{tokens:>6} | {n_all:>7} {n_all / total_hints:>10.2%} | "
+              f"{n_crit:>8} {n_crit / total_critical if total_critical else 0:>9.2%} | "
+              f"{n_crit / n_all if n_all else 0:>10.2%}")
+
+    print("\nOther players' moves right after the hint, per hint (critical hints vs other hints):")
+    print(f"{'tokens':>6} | {'crit: disc':>10} {'crit disc':>9} {'misplay':>7} | "
+          f"{'other: disc':>11} {'crit disc':>9} {'misplay':>7}")
+    for tokens, s in stats.items():
+        row = []
+        for critical in (True, False):
+            n = s[critical]["count"]
+            row.append([s[critical][key] / n if n else 0 for key in keys[1:]])
+        (c_disc, c_crit, c_mis), (o_disc, o_crit, o_mis) = row
+        print(f"{tokens:>6} | {c_disc:>10.3f} {c_crit:>9.3f} {c_mis:>7.3f} | "
+              f"{o_disc:>11.3f} {o_crit:>9.3f} {o_mis:>7.3f}")
 
 
 # ---------------------------------------------------------------------------
@@ -892,6 +1174,40 @@ def create_parser() -> argparse.ArgumentParser:
             type=Path, 
             help="Path to a JSON file or directory of JSON files.",) 
     hint_intent_parser.set_defaults(func=report_hint_intentions)
+
+    # Critical misplays command: report stats on critical misplays and the score lost from them
+    critical_misplays_parser = subparsers.add_parser(
+        "critical_misplays",
+        help="Report stats on critical misplays and the score loss from them.",
+        description="Report stats on critical misplays and the estimated score loss from them, "
+                    "next to the score loss from critical discards.\n"
+                    "If a path to a log file is passed as an argument, it will report stats on the single game."
+                    "If a path to a directory of log files is passed as an argument,"
+                    "it will report aggregate stats on the all games.",
+    )
+    critical_misplays_parser.add_argument(
+        "path",
+        type=Path,
+        help="Path to a log file or directory of log files.",
+    )
+    critical_misplays_parser.set_defaults(func=report_critical_misplays)
+
+    # Critical hints command: critical-card hints by number of hint tokens available
+    critical_hints_parser = subparsers.add_parser(
+        "critical_hints",
+        help="Count critical-card hints at each number of available hint tokens.",
+        description="Report how many hints and critical-card hints were given at each number of available "
+                    "hint tokens, and what the other players did right after them.\n"
+                    "If a path to a log file is passed as an argument, it will report stats on the single game."
+                    "If a path to a directory of log files is passed as an argument,"
+                    "it will report aggregate stats on the all games.",
+    )
+    critical_hints_parser.add_argument(
+        "path",
+        type=Path,
+        help="Path to a log file or directory of log files.",
+    )
+    critical_hints_parser.set_defaults(func=report_critical_hints)
 
     return parser
 
