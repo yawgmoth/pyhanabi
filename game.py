@@ -375,6 +375,16 @@ class HanasimGame(AbstractGame):
                     f"Player {i} ({self.players[i].name}) Hints Given: {hint_frequency[i]}",
                     file=self.log,
                 )
+                if hint_possible[i] == 0:
+                    print(
+                        f"Player {i} ({self.players[i].name}) Communicativeness: n/a (no turn with a hint available)",
+                        file=self.log,
+                    )
+                else:
+                    print(
+                        f"Player {i} ({self.players[i].name}) Communicativeness: {hint_frequency[i] / hint_possible[i]:.2f}",
+                        file=self.log,
+                    )
             print(f"Critical cards discarded: {all_critical_cards}",
                                 file=self.log,
                                             )

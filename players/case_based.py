@@ -288,7 +288,7 @@ class CaseBasedPlayer(Player):
         # V5 forced hints; False recovers redundant/random giving and full interpretation.
         self.forced_hint: bool = True
         # V9/V19 critical card hints; False recovers HEAD behavior.
-        self.critical_card_hints: bool = True
+        self.critical_card_hints: bool = False
         # V17 risky play before the fallback discard; False recovers HEAD behavior.
         self.risky_play: bool = True
 

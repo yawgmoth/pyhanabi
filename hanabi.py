@@ -194,6 +194,30 @@ def report_metrics(pts: list[int], players: list[Player], n: int,
         plt.close("all")
         saved.append(f"{prefix}ipp_{suffix}.png")
 
+        # Communicativeness (Canaan et al.): hints given / turns with a hint available;
+        # NaN when a player never had a hint available that game
+        communicativeness_df = pd.DataFrame({
+            cols[p]: [
+                metrics["hint_frequency"][g][p] / metrics["hint_possible"][g][p] if metrics["hint_possible"][g][p] > 0
+                else numpy.nan
+                for g in range(n)
+            ]
+            for p in range(len(players))
+        })
+        print("\n=== Communicativeness (per game) ===")
+        print(communicativeness_df.describe())
+
+        # Save the communicativeness distribution
+        axes = communicativeness_df.hist(bins=20, figsize=(5 * len(players), 4),
+                                         edgecolor="black", layout=(1, len(players)))
+        for ax in numpy.ravel(axes):
+            ax.set_xlabel("Communicativeness per game")
+            ax.set_ylabel("Number of games")
+        plt.tight_layout()
+        plt.savefig(f"{prefix}communicativeness_{suffix}.png", dpi=120)
+        plt.close("all")
+        saved.append(f"{prefix}communicativeness_{suffix}.png")
+
         # Post-move metrics: one DataFrame per metric
         # rows = games, columns = players
         for name in POST_MOVE_METRICS:
@@ -399,7 +423,7 @@ def main(args):
 
     pts = []
     game_logs: list[tuple[int, int, str]] = []  # (score, game number, log path)
-    all_metrics = {name: [] for name in ["ipp_list", "hint_interpreted_correctly", "hints_received"] + POST_MOVE_METRICS}
+    all_metrics = {name: [] for name in ["ipp_list", "hint_interpreted_correctly", "hints_received", "hint_possible"] + POST_MOVE_METRICS}
 
     for i in list(range(n)):
         # Display in terminal every 100 game
