@@ -276,6 +276,13 @@ def classify_game_logs(game_logs: list[tuple[int, int, str]]):
 
 
 def main(args):
+    n = 1000
+    base_seed = 0
+    if "--seed" in args:
+        k = args.index("--seed")
+        base_seed = int(args[k + 1]) * n
+        del args[k:k + 2]
+
     post_move_metrics = True
     if not args:
         args = ["random"] * 3
@@ -418,7 +425,6 @@ def main(args):
         else:
             players.append(make_player(a, i))
 
-    n = 1000
     timestamp = time.strftime("%Y%m%d_%H%M%S")
 
     pts = []
@@ -430,7 +436,7 @@ def main(args):
         if (i + 1) % 100 == 0:
             print("Starting game", i + 1)
         random.seed(i + 1)
-        hana_sim.set_deck_seed(i + 1)
+        hana_sim.set_deck_seed(base_seed + i + 1)
 
         game_log = io.StringIO()     # empty buffer for this game
         print(f"{len(players)} players: {', '.join(args)}",
