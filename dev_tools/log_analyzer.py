@@ -9,6 +9,7 @@ Usage examples:
 """
 
 import argparse
+import collections
 import re
 import json
 import ast
@@ -909,8 +910,10 @@ def get_critical_hint_info_from_file(path: Path) -> List[dict]:
     Get one dict per hint given in a .txt log file, with:
     - "tokens": the number of hint tokens available before the hint was given
     - "critical": whether the hint touched at least one critical card in the receiver's hand
-    - "discards", "critical_discards", "misplays": what the other players did in the moves right
-      after the hint, before the hinter's next turn (n_players - 1 moves)
+    - "after": what each other player did right after the hint, before the hinter's next turn;
+      after[0] is the next player's move, after[1] the move of the player after that, ...
+      (n_players - 1 moves, fewer at the end of the game). Each is a dict with
+      "discards", "critical_discards", "misplays" (0 or 1).
     """
     n_players, states = parse_game_states(path)
     hints = []
@@ -929,18 +932,16 @@ def get_critical_hint_info_from_file(path: Path) -> List[dict]:
         info = {
             "tokens": prev["hints"],
             "critical": any(is_critical_card(card, prev["board"], prev["trash"]) for card in touched),
-            "discards": 0,
-            "critical_discards": 0,
-            "misplays": 0,
+            "after": [],
         }
         for j in range(k + 1, min(k + n_players, len(states))):
             move, before = states[j]["move"], states[j - 1]
-            if " discards " in move:
-                info["discards"] += 1
-                if is_critical_card(parse_card(move), before["board"], before["trash"]):
-                    info["critical_discards"] += 1
-            elif "and it failed" in move:
-                info["misplays"] += 1
+            discard = " discards " in move
+            info["after"].append({
+                "discards": int(discard),
+                "critical_discards": int(discard and is_critical_card(parse_card(move), before["board"], before["trash"])),
+                "misplays": int("and it failed" in move),
+            })
         hints.append(info)
     return hints
 
@@ -958,16 +959,20 @@ def report_critical_hints(path: Path) -> None:
         return
     print(f"Reporting critical-card hints by hint tokens for: {path}")
 
-    keys = ["count", "discards", "critical_discards", "misplays"]
-    # stats[tokens][critical] -> totals over the hints given with that many tokens
-    stats = {tokens: {critical: dict.fromkeys(keys, 0) for critical in (True, False)}
+    keys = ["discards", "critical_discards", "misplays"]
+    # stats[tokens][critical]["count"] -> number of hints given with that many tokens
+    # stats[tokens][critical]["after"][pos] -> totals over the move of the pos-th player after the hinter
+    stats = {tokens: {critical: {"count": 0, "after": collections.defaultdict(lambda: dict.fromkeys(["moves"] + keys, 0))}
+                      for critical in (True, False)}
              for tokens in range(1, MAX_HINT_TOKENS + 1)}
     for file in files:
         for hint in get_critical_hint_info_from_file(file):
             bucket = stats[hint["tokens"]][hint["critical"]]
             bucket["count"] += 1
-            for key in keys[1:]:
-                bucket[key] += hint[key]
+            for pos, move in enumerate(hint["after"]):
+                bucket["after"][pos]["moves"] += 1
+                for key in keys:
+                    bucket["after"][pos][key] += move[key]
 
     total_hints = sum(s[c]["count"] for s in stats.values() for c in (True, False))
     total_critical = sum(s[True]["count"] for s in stats.values())
@@ -986,17 +991,20 @@ def report_critical_hints(path: Path) -> None:
               f"{n_crit:>8} {n_crit / total_critical if total_critical else 0:>9.2%} | "
               f"{n_crit / n_all if n_all else 0:>10.2%}")
 
-    print("\nOther players' moves right after the hint, per hint (critical hints vs other hints):")
-    print(f"{'tokens':>6} | {'crit: disc':>10} {'crit disc':>9} {'misplay':>7} | "
-          f"{'other: disc':>11} {'crit disc':>9} {'misplay':>7}")
-    for tokens, s in stats.items():
-        row = []
-        for critical in (True, False):
-            n = s[critical]["count"]
-            row.append([s[critical][key] / n if n else 0 for key in keys[1:]])
-        (c_disc, c_crit, c_mis), (o_disc, o_crit, o_mis) = row
-        print(f"{tokens:>6} | {c_disc:>10.3f} {c_crit:>9.3f} {c_mis:>7.3f} | "
-              f"{o_disc:>11.3f} {o_crit:>9.3f} {o_mis:>7.3f}")
+    positions = sorted({pos for s in stats.values() for c in (True, False) for pos in s[c]["after"]})
+    for pos in positions:
+        who = "Next player" if pos == 0 else f"Player {pos + 1} after the hinter"
+        print(f"\n{who}'s move right after the hint, rate per move (critical hints vs other hints):")
+        print(f"{'tokens':>6} | {'crit: disc':>10} {'crit disc':>9} {'misplay':>7} | "
+              f"{'other: disc':>11} {'crit disc':>9} {'misplay':>7}")
+        for tokens, s in stats.items():
+            row = []
+            for critical in (True, False):
+                after = s[critical]["after"][pos]
+                row.append([after[key] / after["moves"] if after["moves"] else 0 for key in keys])
+            (c_disc, c_crit, c_mis), (o_disc, o_crit, o_mis) = row
+            print(f"{tokens:>6} | {c_disc:>10.3f} {c_crit:>9.3f} {c_mis:>7.3f} | "
+                  f"{o_disc:>11.3f} {o_crit:>9.3f} {o_mis:>7.3f}")
 
 
 # ---------------------------------------------------------------------------
