@@ -6,6 +6,7 @@ Removes:
   - all low-score logs under log/low_scores/
   - all high-score logs under log/high_scores/ (and log/max_score/ from older runs)
   - all json logs under json/
+  - all evaluation pipeline runs under results/ (from evaluate.py)
 
 Usage:
     python clear_outputs.py           # asks for confirmation
@@ -28,8 +29,9 @@ TARGETS = [
     (os.path.join(REPO_ROOT, "log"), False),
     (os.path.join(REPO_ROOT, "log", "low_scores"), True),
     (os.path.join(REPO_ROOT, "log", "high_scores"), True),
-    (os.path.join(REPO_ROOT, "log", "max_score"), True),  # left over from older runs
+    (os.path.join(REPO_ROOT, "log", "max_score"), True),
     (os.path.join(REPO_ROOT, "json"), True),
+    (os.path.join(REPO_ROOT, "results"), True)
 ]
 
 
@@ -92,6 +94,16 @@ def main():
             deleted += 1
         except OSError as e:
             print(f"  failed to delete {path}: {e}", file=sys.stderr)
+
+    # Remove the now-empty eval_<timestamp>/ folders under results/
+    results_dir = os.path.join(REPO_ROOT, "results")
+    if os.path.isdir(results_dir):
+        for root, dirs, _ in os.walk(results_dir, topdown=False):
+            for d in dirs:
+                try:
+                    os.rmdir(os.path.join(root, d))  # only succeeds if empty
+                except OSError:
+                    pass
 
     print(f"Deleted {deleted} file(s).")
 
