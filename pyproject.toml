@@ -9,6 +9,8 @@ dependencies = [
     "pandas>=2.3.3",
     "openai>=1.0.0",
     "python-Levenshtein>=0.27.0",
+    "scipy>=1.14.0",
+    "statsmodels>=0.14.0",
 ]
 
 [dependency-groups]
@@ -16,4 +18,9 @@ dev = [
     "mypy>=1.16.0",
     "pre-commit>=4.2.0",
     "ruff~=0.12.1",
+    "pytest>=8.0.0",
 ]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

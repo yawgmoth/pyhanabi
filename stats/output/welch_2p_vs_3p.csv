@@ -1,0 +1,2 @@
+n_a,n_b,mean_a,mean_b,std_a,std_b,p,statistic,note,timestamp_2p,timestamp_3p
+1000,1000,15.934,16.584,3.29248910165007,1.8358415820310623,5.7594046237451004e-08,-5.452605927377686,2p and 3p scores are not directly comparable (different decks and rules).,20260916_154859,20260930_181448
