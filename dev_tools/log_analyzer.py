@@ -16,6 +16,7 @@ import ast
 from pathlib import Path
 from typing import Tuple, List
 
+# Global variables for the parser
 ALLOWED_SUBDIRS = {"low_scores", "high_scores", "max_score"}
 CARD_COUNTS = {
     1: 3,
@@ -25,6 +26,29 @@ CARD_COUNTS = {
     5: 1
 }
 END_REASONS = ["deck exhausted", "out of lives", "board completed"]
+
+
+# --------------------------------------------------------------
+# Start of patterns for the missed_dead_color_discards command
+COLOR_PATTERN = r"(?:white|red|blue|green|yellow)"
+MOVE_LINE_REGEX = re.compile(r"^Move (\d+): Player (\d+) (hints|plays|discards)\b")
+MOVE_CARD_REGEX = re.compile(rf"\b({COLOR_PATTERN}) ([1-5])\b")
+STARTING_HAND_REGEX = re.compile(r"^Player (\d+): (.+)$")
+HAND_HEADER_REGEX = re.compile(r"^\s+Player (\d+):\s*$")
+HAND_CARD_REGEX = re.compile(
+    rf"^\s*\[\d+\]\s+({COLOR_PATTERN})\s+([1-5])\s*->\s*color:\s*([^;]+?);\s*number:\s*(.+?)\s*$"
+)
+# End of patterns for the missed_dead_color_discards command
+# --------------------------------------------------------------
+
+# --------------------------------------------------------------
+# Start of functions useful to multiple commands
+# --------------------------------------------------------------
+def format_ratio(numerator: int, denominator: int) -> str:
+    return "N/A (division by zero)" if denominator == 0 else str(numerator / denominator)
+# End of functions useful to multiple commands
+# --------------------------------------------------------------
+
 
 # ---------------------------------------------------------------------------
 # Command: critical_discards
@@ -1008,6 +1032,297 @@ def report_critical_hints(path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Command: missed_dead_color_discards
+# ---------------------------------------------------------------------------
+
+def parse_knowledge(text: str, cast=str):
+    """Turn 'any' into None and 'a/b/c' into [a, b, c] (each element passed through cast)."""
+    text = text.strip()
+    return None if text == "any" else [cast(x) for x in text.split("/")]
+
+
+def parse_game_states(lines: List[str]) -> Tuple[dict, List[dict]]:
+    """
+    Parse a game log into the starting state and a list with one entry per move.
+    Every state printed in the log is the state AFTER the move was played, so the state BEFORE
+    move i is the state after move i - 1 (or the starting state for the first move).
+
+    Each state is a dict with:
+     - "number", "player", "kind" ("hints", "plays" or "discards"), "line": details on the move
+     - "color", "rank": the card played or discarded (None for hints)
+     - "success": whether a play succeeded (None otherwise)
+     - "board": {color: height}
+     - "trash": list of strings such as "green 4"
+     - "hands": {player: [(color, rank, possible_colors, possible_ranks), ...]}, where the
+       possibilities are what the owner knows about the card (None means "any")
+    """
+    starting_hands = {}
+    states = []
+    current = None
+    current_player = None
+
+    for raw_line in lines:
+        line = raw_line.rstrip("\n")
+        if line.startswith("Game done"):
+            break
+
+        move_match = MOVE_LINE_REGEX.match(line)
+        if move_match:
+            current = {
+                "number": int(move_match.group(1)),
+                "player": int(move_match.group(2)),
+                "kind": move_match.group(3),
+                "line": line,
+                "color": None,
+                "rank": None,
+                "success": None,
+                "board": {},
+                "trash": [],
+                "hands": {},
+            }
+            if current["kind"] != "hints":
+                card_match = MOVE_CARD_REGEX.search(line)
+                assert card_match, f"Cannot find the card in the move: {line}"
+                current["color"] = card_match.group(1)
+                current["rank"] = int(card_match.group(2))
+            if current["kind"] == "plays":
+                current["success"] = "successfully" in line
+            states.append(current)
+            current_player = None
+            continue
+
+        if current is None:
+            # Still in the header: pick up the starting hands
+            starting_match = STARTING_HAND_REGEX.match(line)
+            if starting_match:
+                starting_hands[int(starting_match.group(1))] = [
+                    (color, int(rank), None, None)
+                    for color, rank in MOVE_CARD_REGEX.findall(starting_match.group(2))
+                ]
+            continue
+
+        if line.startswith("Board:"):
+            for entry in line.removeprefix("Board:").split(","):
+                color, height = entry.split()
+                current["board"][color] = int(height)
+        elif line.startswith("Trash:"):
+            trash_text = line.removeprefix("Trash:").strip()
+            current["trash"] = [] if trash_text == "(empty)" else trash_text.split(", ")
+        else:
+            header_match = HAND_HEADER_REGEX.match(line)
+            if header_match:
+                current_player = int(header_match.group(1))
+                current["hands"][current_player] = []
+                continue
+            card_match = HAND_CARD_REGEX.match(line)
+            if card_match and current_player is not None:
+                current["hands"][current_player].append((
+                    card_match.group(1),
+                    int(card_match.group(2)),
+                    parse_knowledge(card_match.group(3)),
+                    parse_knowledge(card_match.group(4), int),
+                ))
+
+    assert states, "No moves found in the log"
+    initial_state = {
+        "board": {color: 0 for color in states[0]["board"]},
+        "trash": [],
+        "hands": starting_hands,
+    }
+    return initial_state, states
+
+
+def knows_full_identity(card: tuple) -> bool:
+    """Whether the owner of the card knows both its color and its rank."""
+    _, _, possible_colors, possible_ranks = card
+    return (possible_colors is not None and len(possible_colors) == 1
+            and possible_ranks is not None and len(possible_ranks) == 1)
+
+
+def get_blocked_rank(color: str, board: dict, trash: List[str]):
+    """
+    Return the lowest rank of the color above the current board height for which every copy is in the
+    trash (so the stack can never grow past rank - 1), or None if the color is not blocked.
+    """
+    for rank in range(board[color] + 1, 6):
+        if trash.count(f"{color} {rank}") >= CARD_COUNTS[rank]:
+            return rank
+    return None
+
+
+def is_dead_card(color: str, rank: int, board: dict, trash: List[str]) -> bool:
+    """
+    A card is dead if its color is dead for it: some lower rank, which still has to be played, has been
+    completely discarded, so the card can never be played.
+    """
+    blocked_rank = get_blocked_rank(color, board, trash)
+    return blocked_rank is not None and rank > blocked_rank
+
+
+def refines(before_possibilities, after_possibilities) -> bool:
+    """
+    Whether the knowledge after a move is consistent with the knowledge before it: possibilities can only
+    be narrowed down (None means "any"), never widened.
+    """
+    if before_possibilities is None:
+        return True
+    if after_possibilities is None:
+        return False
+    return set(after_possibilities) <= set(before_possibilities)
+
+
+def find_removed_slot(hand_before: list, hand_after: list, color: str, rank: int) -> int:
+    """
+    Find the slot of the card that was removed from hand_before to obtain hand_after.
+    The remaining cards shift towards slot 0 and the new card, if any is drawn, is appended last.
+    The knowledge about the remaining cards may get narrowed down by the move (for example, once every copy
+    of white 4 is gone, a card known to be a 4 cannot be white anymore), so it is compared with _refines
+    rather than for equality.
+    Return -1 if no slot is consistent.
+    """
+    drew_a_card = len(hand_after) == len(hand_before)
+    kept = hand_after[:-1] if drew_a_card else hand_after
+    for slot, card in enumerate(hand_before):
+        if (card[0], card[1]) != (color, rank):
+            continue
+        remaining = hand_before[:slot] + hand_before[slot + 1:]
+        if len(remaining) != len(kept):
+            continue
+        if all(old[:2] == new[:2] and refines(old[2], new[2]) and refines(old[3], new[3])
+               for old, new in zip(remaining, kept)):
+            return slot
+    return -1
+
+
+def is_useless_card(color: str, rank: int, board: dict, trash: List[str]) -> bool:
+    """A card is useless if it is dead, or if it has already been played on the board."""
+    return rank <= board[color] or is_dead_card(color, rank, board, trash)
+
+
+def get_missed_dead_color_discards_from_file(path: Path) -> Tuple[int, int, int, int, int]:
+    """For the file at path, return information on missed dead color discards.
+     - result[0] is the number of times a player knows the full identity of a dead card and discards it
+     - result[1] is the number of times a player knows the full identity of a ded card and does not discard it
+     - result[2] is the number of times result[1] happens AND the player misplays
+     - result[3] is the number of times result[1] happens AND the player discards something else
+     - result[4] is the number of times result[3] happens AND the card discarded was not useless
+     """
+    assert path.is_file(), f"The provided path is not a file: {path}"
+    with open(path, "r") as f:
+        lines = f.readlines()
+
+    initial_state, states = parse_game_states(lines)
+
+    discarded_known_dead = 0
+    missed = 0
+    missed_and_misplayed = 0
+    missed_and_discarded_other = 0
+    missed_and_discarded_non_useless = 0
+
+    for i, state in enumerate(states):
+        # The player decides based on the state before the move, which is the state printed after the previous move
+        before = states[i - 1] if i > 0 else initial_state
+        player = state["player"]
+        board, trash = before["board"], before["trash"]
+        hand = before["hands"][player]
+
+        # 1. Identify the cards the player knows fully, and that are dead
+        known_dead_slots = [
+            slot for slot, card in enumerate(hand)
+            if knows_full_identity(card)
+               and is_dead_card(card[2][0], card[3][0], board, trash)
+        ]
+        if not known_dead_slots:  # We are only concerned with cases of dead card
+            continue
+
+        # 2. Identify whether the player discards the card or not
+        # Here, the player knows to have a dead card in their hand
+        if state["kind"] == "discards":
+            slot = find_removed_slot(hand, state["hands"][player], state["color"], state["rank"])
+            assert slot != -1, f"Cannot find the discarded card for move {state['number']} in {path}"
+            if slot in known_dead_slots:
+                discarded_known_dead += 1
+                continue
+        missed += 1
+        # Here, the player has not discarded a card that they knew to be dead
+
+        # 3. Identify whether the player misplays
+        if state["kind"] == "plays" and not state["success"]:
+            missed_and_misplayed += 1
+
+        # 4. Identify whether the player discards another card instead
+        elif state["kind"] == "discards":
+            missed_and_discarded_other += 1
+            # 5. Identify whether that card was useless
+            if not is_useless_card(state["color"], state["rank"], board, trash):
+                missed_and_discarded_non_useless += 1
+
+    return (discarded_known_dead,
+            missed,
+            missed_and_misplayed,
+            missed_and_discarded_other,
+            missed_and_discarded_non_useless)
+
+
+def report_missed_dead_color_discards(path: Path, verbose=False) -> None:
+    """
+    Report information on cases where a player knows the full identity of a dead card but chooses not to discard it.
+    """
+    labels = [
+        "Times a player knows a dead card and discards it",
+        "Times a player knows a dead card and does not discard it",
+        "Times a player does not discard a known dead card and misplays instead",
+        "Times a player does not discard a known dead card and discards another card instead",
+        "Times the card displayed instead was not useless",
+    ]
+
+    if path.is_file():
+        print(f"Reporting missed dead color discards for file: {path}")
+        if verbose:
+            print("WARNING: verbose mode has no effect when reporting on an individual file. The argument is being ignored")
+        results = get_missed_dead_color_discards_from_file(path)
+        for label, value in zip(labels, results):
+            print(f"{label}: {value}")
+        print("Ratio of known dead cards which are not discarded:", format_ratio(results[1], results[0] + results[1]))
+        print("Ratio of missed discards followed by a misplay:", format_ratio(results[2], results[1]))
+        print("Ratio of missed discards followed by another discard:", format_ratio(results[3], results[1]))
+        print("Ratio of other discards which were not useless:", format_ratio(results[4], results[3]))
+    elif path.is_dir():
+        print(f"Reporting missed dead color discards for directory: {path}")
+        aggregate = [0] * 5
+        games_with_stat = [[] for _ in range(5)]
+        game_count = 0
+        for file in path.rglob("*"):
+            if file.is_dir():
+                assert file.name in ALLOWED_SUBDIRS, (f"The path under directory {path} is not a file: {file}, "
+                                                      f"and does not correspond to an allowed subdirectory name")
+                continue
+            game_count += 1
+            results = get_missed_dead_color_discards_from_file(file)
+            for stat, value in enumerate(results):
+                aggregate[stat] += value
+                if value > 0:
+                    games_with_stat[stat].append(file.name)
+
+        if game_count == 0:
+            raise ValueError(f"No game logs were found in the directory: {path}")
+
+        print("Number of games:", game_count)
+        for stat, label in enumerate(labels):
+            print(f"Aggregate - {label}: {aggregate[stat]}")
+            print(f"Average per game - {label}: {aggregate[stat] / game_count}")
+            if verbose:
+                print(f"Games with at least one - {label}: {games_with_stat[stat]}")
+        print("Ratio of known dead cards which are not discarded:",
+              format_ratio(aggregate[1], aggregate[0] + aggregate[1]))
+        print("Ratio of missed discards followed by a misplay:", format_ratio(aggregate[2], aggregate[1]))
+        print("Ratio of missed discards followed by another discard:", format_ratio(aggregate[3], aggregate[1]))
+        print("Ratio of other discards which were not useless:", format_ratio(aggregate[4], aggregate[3]))
+    else:
+        raise ValueError(f"Path does not exist: {path}")
+
+
+# ---------------------------------------------------------------------------
 # Argument parser setup
 # ---------------------------------------------------------------------------
 
@@ -1168,7 +1483,7 @@ def create_parser() -> argparse.ArgumentParser:
     )
     end_reasons_parser.set_defaults(func=report_end_reasons)
 
-    # hint intentions command: number of play and discard hints
+    # Hint intentions command: number of play and discard hints
     hint_intent_parser = subparsers.add_parser(
         "report_hint_intentions",
         help="Report stats on number of play and discard hints.",
@@ -1217,17 +1532,44 @@ def create_parser() -> argparse.ArgumentParser:
     )
     critical_hints_parser.set_defaults(func=report_critical_hints)
 
+    # Missed dead color discards command: report information on missed discards of known dead colors
+    missed_dead_color_discards_parser = subparsers.add_parser(
+        "missed_dead_color_discards",
+        help="Report information on missed discards of known dead colors.",
+        description="Consider cases where a player knows the full identity of a dead card, but still does not"
+                    "discard it.\n"
+                    "Report additional information on these subcases.\n"
+                    "   - When a missed discard leads to misplay\n"
+                    "   - When a missed discard leads to another discard\n"
+                    "   - When the card discarded instead was not useless\n"
+                    "If a path to a log file is passed as an argument, it will report information on the single game."
+                    "If a path to a directory of log files is passed as an argument,"
+                    "it will report aggregate information on the all games."
+    )
+    missed_dead_color_discards_parser.add_argument(
+        "path",
+        type=Path,
+        help="Path to a log file or directory of log files.",
+    )
+    missed_dead_color_discards_parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Show the list of games for each of the relevant stats.",
+    )
+    missed_dead_color_discards_parser.set_defaults(func=report_missed_dead_color_discards)
+
     return parser
 
 
 def main() -> int:
     parser = create_parser()
     args = parser.parse_args()
+    verbose_commands = {"lost_lives", "missed_dead_color_discards"}
 
     try:
         if args.command == "compare_corresponding_games":
             args.func(args.base_path, args.new_path, args.verbose)
-        elif args.command == "lost_lives":
+        elif args.command in verbose_commands:
             args.func(args.path, args.verbose)
         else:
             args.func(args.path)
